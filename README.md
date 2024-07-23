@@ -9,7 +9,7 @@
 ***✨ 视频指定区域文本提取工具 ✨***</div>
 <p align="center">
   <a href="https://github.com/hzh888/picocr"><img alt="Static Badge" src="https://img.shields.io/badge/Python-3.10-8A2BE2?style=flat"></a>
-  <a href="https://github.com/hzh888/picocr"><img alt="GitHub License" src="https://img.shields.io/github/license/hzh888/picocr?style=flat"></a>
+  <a href="https://github.com/hzh888/picocr"><img alt="GitHub License" src="https://img.shields.io/github/license/hzh888/picocr"></a>
   <a href="https://github.com/hzh888/picocr/releases"><img alt="GitHub release" src="https://img.shields.io/github/v/release/hzh/picocr?style=flat"></a>
   <a href="https://github.com/hzh888/picocr"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/hzh888/picocr?style=flat"></a>
   <a href="https://github.com/hzh888/picocr"><img alt="GitHub forks" src="https://img.shields.io/github/forks/hzh888/picocr?style=flat"></a>
