@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://github.com/hzh888/picocr"><img src="https://api.fxgnt.cn/logo.png" alt="picocr" width="115" /></a>
+  <a href="https://github.com/hzh888/picocr"><img src="https://github.com/hzh888/picocr/blob/main/resource/logo.png" alt="picocr" width="115" /></a>
 </p>
 
 <div align="center">
