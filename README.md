@@ -18,7 +18,7 @@
 <a href="https://github.com/hzh888/picocr"><img src="https://raw.githubusercontent.com/hzh888/picocr/main/resource/tool.png" alt="picocr"></a>
 
 ## 什么是PicOCR?
-基于Qt框架+QFluentWidgets组件库开发的视频图像OCR识别开源工具，集成了多线程技术，能够高效处理视频中的图像并通过内置的OCR模型（Ddddocr和PaddleOCR）识别文本，轻松导出识别结果至Excel表格，并支持文本替换和去除文本功能，灵活满足不同需求，友好的GUI用户界面和实时任务进度显示，操作简便且直观。
+基于Qt框架+QFluentWidgets组件库开发的视频自定义图像区域OCR识别开源工具，集成了多线程技术，通过内置的OCR开源模型进行识别自定义视频区域内的文本，识别区域支持多区域识别，识别完成后结果会导出Excel表格，同时支持自定义文本替换和自定义去除文本功能。
 
 ## 当前功能
 - [x] 多种OCR模型
