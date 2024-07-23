@@ -10,7 +10,8 @@
 <p align="center">
   <a href="https://github.com/hzh888/picocr"><img alt="Static Badge" src="https://img.shields.io/badge/Python-3.10-8A2BE2?style=flat"></a>
   <a href="https://github.com/hzh888/picocr"><img alt="GitHub License" src="https://img.shields.io/github/license/hzh888/picocr"></a>
-  <a href="https://github.com/hzh888/picocr/releases"><img alt="GitHub release" src="https://img.shields.io/github/v/release/hzh/picocr?style=flat"></a>
+  <a href="https://github.com/hzh888/picocr/releases"><img alt="GitHub release" src="<img alt="GitHub Release" src="https://img.shields.io/github/v/release/hzh888/picocr?style=flat&color=32CD32">
+"></a>
   <a href="https://github.com/hzh888/picocr"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/hzh888/picocr?style=flat"></a>
   <a href="https://github.com/hzh888/picocr"><img alt="GitHub forks" src="https://img.shields.io/github/forks/hzh888/picocr?style=flat"></a>
 </p>
@@ -20,7 +21,7 @@
 ## 什么是PicOCR?
 基于Qt框架+QFluentWidgets组件库开发的视频图像OCR识别开源工具，集成了多线程技术，能够高效处理视频中的图像并通过内置的OCR模型（Ddddocr和PaddleOCR）识别文本，轻松导出识别结果至Excel表格，并支持文本替换和去除文本功能，灵活满足不同需求，友好的GUI用户界面和实时任务进度显示，操作简便且直观。
 
-## 功能
+## 当前功能
 - [x] 多种OCR模型
 - [x] 任务执行进度显示
 - [x] 多任务执行
