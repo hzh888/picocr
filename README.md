@@ -10,8 +10,7 @@
 <p align="center">
   <a href="https://github.com/hzh888/picocr"><img alt="Static Badge" src="https://img.shields.io/badge/Python-3.10-8A2BE2?style=flat"></a>
   <a href="https://github.com/hzh888/picocr"><img alt="GitHub License" src="https://img.shields.io/github/license/hzh888/picocr"></a>
-  <a href="https://github.com/hzh888/picocr/releases"><img alt="GitHub release" src="<img alt="GitHub Release" src="https://img.shields.io/github/v/release/hzh888/picocr?style=flat&color=32CD32">
-"></a>
+  <a href="https://github.com/hzh888/picocr/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/hzh888/picocr?style=flat&color=32CD32"></a>
   <a href="https://github.com/hzh888/picocr"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/hzh888/picocr?style=flat"></a>
   <a href="https://github.com/hzh888/picocr"><img alt="GitHub forks" src="https://img.shields.io/github/forks/hzh888/picocr?style=flat"></a>
 </p>
