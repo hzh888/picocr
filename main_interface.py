@@ -111,16 +111,29 @@ class Addtaskinterface(QWidget):
         self.input_entry.setPlaceholderText("请输入任务名")
         self.input_entry.setValidator(QRegularExpressionValidator(QRegularExpression("[^\s]*")))
         self.input_entry.setClearButtonEnabled(True)
+
+        self.frame_interval_entry = LineEdit(self)
+        self.frame_interval_entry.setPlaceholderText("提取间隔")
+        self.frame_interval_entry.setValidator(QRegularExpressionValidator(QRegularExpression(r'^[1-9]\d*$')))
+        self.frame_interval_entry.setText("1")
+
         self.dropdown1 = ComboBox(self)
         self.dropdown1.addItems(["Ddddocr模型", "Paddle模型"])
+
+        self.grayscale_dropdown = ComboBox(self)
+        self.grayscale_dropdown.addItems(["转换灰度图像", "不转换灰度图像"])
+
         self.dropdown3 = ComboBox(self)
         self.dropdown3.addItems(["导出表格", "不导出表格"])
+
         self.dropdown4 = ComboBox(self)
         self.dropdown4.addItems(["不替换文本", "替换文本", "去掉文本"])
         self.dropdown4.currentIndexChanged.connect(self.update_input_visibility)
 
         input_layout.addWidget(self.input_entry, 2)
+        input_layout.addWidget(self.frame_interval_entry, 1)
         input_layout.addWidget(self.dropdown1, 1)
+        input_layout.addWidget(self.grayscale_dropdown, 1)
         input_layout.addWidget(self.dropdown3, 1)
         input_layout.addWidget(self.dropdown4, 1)
 
@@ -128,6 +141,8 @@ class Addtaskinterface(QWidget):
         input_layout.setStretch(1, 1)
         input_layout.setStretch(2, 1)
         input_layout.setStretch(3, 1)
+        input_layout.setStretch(4, 1)
+        input_layout.setStretch(5, 1)
 
         self.additional_input_container = QVBoxLayout()
         self.top_input_layout = QHBoxLayout()
@@ -364,6 +379,8 @@ class Addtaskinterface(QWidget):
         self.dropdown1.setCurrentIndex(0)
         self.dropdown3.setCurrentIndex(0)
         self.dropdown4.setCurrentIndex(0)
+        self.frame_interval_entry.setText("1")
+        self.grayscale_dropdown.setCurrentIndex(0)
         while self.additional_input_layouts:
             self.remove_additional_input(self.additional_input_layouts[-1])
         self.update_input_visibility()
@@ -405,6 +422,8 @@ class Addtaskinterface(QWidget):
         export_option = self.dropdown3.currentText()
         replace_option = self.dropdown4.currentText()
         image_path = self.capture_entry.text()
+        frame_interval = self.frame_interval_entry.text()
+        grayscale_option = self.grayscale_dropdown.currentText()
 
         if not file_path:
             self.show_info_bar('文件路径不能为空', 'error')
@@ -414,6 +433,9 @@ class Addtaskinterface(QWidget):
             return
         if not image_path:
             self.show_info_bar('请添加识别图片', 'error')
+            return
+        if not frame_interval:
+            self.show_info_bar('请输入提取间隔', 'error')
             return
 
         replace_texts = []
@@ -475,7 +497,7 @@ class Addtaskinterface(QWidget):
             os.rename(src_path, dst_path)
 
         self.task_list_interface.add_task(task_name, model, export_option, file_path, replace_option, image_path,
-                                          replace_text)
+                                          replace_text, frame_interval, grayscale_option)
         self.show_info_bar('任务添加成功', 'success')
 
         self.clear_inputs()
