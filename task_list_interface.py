@@ -1,8 +1,8 @@
-# coding:utf-8
 import os
 import cv2
 import time
 import ddddocr
+from natsort import natsorted
 from paddleocr import PaddleOCR
 from threading import Thread
 from openpyxl import Workbook
@@ -39,7 +39,10 @@ def run_ocr(task, log_signal, progress_signal, result_signal, total_steps):
         if model == "Ddddocr模型":
             ocr_model = ddddocr.DdddOcr()
         elif model == "Paddle模型":
-            ocr_model = PaddleOCR(det_model_dir = './models/whl/det/ch/ch_PP-OCRv4_det_infer/', rec_model_dir = './models/whl/rec/ch/ch_PP-OCRv4_rec_infer/', cls_model_dir = './models/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/', lang = 'ch', use_angle_cls = True, use_gpu = False)
+            ocr_model = PaddleOCR(det_model_dir='./models/whl/det/ch/ch_PP-OCRv4_det_infer/',
+                                  rec_model_dir='./models/whl/rec/ch/ch_PP-OCRv4_rec_infer/',
+                                  cls_model_dir='./models/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/',
+                                  lang='ch', use_angle_cls=True, use_gpu=False)
 
         step_count = total_steps // 2  # 已完成的视频转换部分
         ocr_results = {}
@@ -60,28 +63,49 @@ def run_ocr(task, log_signal, progress_signal, result_signal, total_steps):
 
             ocr_results[img_name] = []
 
-            for image_file in os.listdir(folder_path):
+            # 对图片文件名进行自然排序
+            image_files = natsorted(os.listdir(folder_path))
+
+            for image_file in image_files:
                 img_path = os.path.join(folder_path, image_file)
-                result = ""
-                if model == "Ddddocr模型":
-                    with open(img_path, "rb") as img_file:
-                        img_data = img_file.read()
-                        result = ocr_model.classification(img_data)
-                elif model == "Paddle模型":
-                    paddle_result = ocr_model.ocr(img_path, cls=True)
-                    if paddle_result and paddle_result[0]:
-                        result = ''.join([line[1][0] for line in paddle_result[0]])
-                    else:
-                        result = ""
 
-                # 调用替换文本方法
-                result = replace_text_in_result(result, replace_option, replace_text)
-                ocr_results[img_name].append((image_file, result))
-                log_signal.emit(f"图片 {image_file} 的识别结果: {result}")
-                time.sleep(0.1)  # 延迟100ms
+                # 读取图片
+                image = cv2.imdecode(np.fromfile(img_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+                if image is None:
+                    log_signal.emit(f"无法读取 '{image_file}' 图片，任务停止")
+                    return
 
-                step_count += 1
-                progress_signal.emit(int((step_count / total_steps) * 100))
+                # 找到轮廓
+                contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for contour in contours:
+                    x, y, w, h = cv2.boundingRect(contour)
+                    # 根据外接矩形分割字符
+                    char_image = image[y:y + h, x:x + w]
+
+                    # 保存字符图像到临时路径
+                    char_path = f"{folder_path}/temp_char.png"
+                    cv2.imwrite(char_path, char_image)
+
+                    result = ""
+                    if model == "Ddddocr模型":
+                        with open(char_path, "rb") as img_file:
+                            char_data = img_file.read()
+                            result = ocr_model.classification(char_data)
+                    elif model == "Paddle模型":
+                        paddle_result = ocr_model.ocr(char_path, cls=True)
+                        if paddle_result and paddle_result[0]:
+                            result = ''.join([line[1][0] for line in paddle_result[0]])
+
+                    os.remove(char_path)  # 删除临时文件
+
+                    # 调用替换文本方法
+                    result = replace_text_in_result(result, replace_option, replace_text)
+                    ocr_results[img_name].append((image_file, result))
+                    log_signal.emit(f"图片 {image_file} 的识别结果: {result}")
+                    time.sleep(0.1)  # 延迟100ms
+
+                    step_count += 1
+                    progress_signal.emit(int((step_count / total_steps) * 100))
 
             log_signal.emit(f"识别 '{img_name}' 结束")
 
@@ -91,7 +115,6 @@ def run_ocr(task, log_signal, progress_signal, result_signal, total_steps):
 
     except Exception as e:
         log_signal.emit(f"处理过程中出现错误: {e}")
-
 
 def replace_text_in_result(result, replace_option, replace_text):
     """
@@ -134,28 +157,22 @@ class ImageProcessingThread(QThread):
         try:
             task_name = self.task['task_name']
             imagestorage_dir = os.path.join('Imagestorage', task_name)
+            frame_interval = int(self.task['frame_interval'])
+            grayscale_option = self.task['grayscale_option'] == "转换灰度图像"
 
-            # 删除旧文件夹
             if os.path.exists(imagestorage_dir):
                 self._delete_folder(imagestorage_dir)
                 self.log_signal.emit(f"已删除 '{task_name}' 旧文件夹")
 
-            # 创建新文件夹
             os.makedirs(imagestorage_dir)
             self.log_signal.emit(f"开始执行 '{os.path.basename(self.task['file_path'])}' 转换图片")
 
-            # 检查视频文件是否存在
             file_path = self.task['file_path']
             if not os.path.exists(file_path):
                 self.log_signal.emit(f"'{os.path.basename(file_path)}' 不存在，任务停止")
                 return
 
             recognition_image_paths = self.task['recognition_image_path'].split(",")
-            model = self.task['model']
-            replace_option = self.task['replace_option']
-            replace_text = self.task['replace_text']
-
-            # 读取视频并转换成图片
             cap = cv2.VideoCapture(file_path)
             if not cap.isOpened():
                 self.log_signal.emit("无法打开视频文件")
@@ -164,72 +181,64 @@ class ImageProcessingThread(QThread):
             fps = int(cap.get(cv2.CAP_PROP_FPS))
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             duration = total_frames / fps
-            total_steps = int(duration) * len(recognition_image_paths) * 2  # 两个阶段：转换和识别
+            total_steps = int(duration // frame_interval) * len(recognition_image_paths) * 2
 
             step_count = 0
-            second_count = 0
 
             for img_name in recognition_image_paths:
                 img_name = img_name.strip()
                 folder_name = img_name.split('.')[0]
                 folder_path = os.path.join(imagestorage_dir, folder_name)
 
-                # 创建存储识别图片的文件夹
                 if not os.path.exists(folder_path):
                     os.makedirs(folder_path)
 
                 self.log_signal.emit(f"开始截取 '{img_name}' 图片")
-                task_name = self.task['task_name']
                 full_path = os.path.join("Identifyimages", task_name, img_name)
                 if not os.path.exists(full_path):
                     self.log_signal.emit(f"'{img_name}' 图片不存在，任务停止")
                     return
 
-                # 使用np.fromfile和cv2.imdecode处理中文路径
-                recognition_image = cv2.imdecode(np.fromfile(full_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+                recognition_image = cv2.imdecode(np.fromfile(full_path, dtype=np.uint8), cv2.IMREAD_COLOR)
                 if recognition_image is None:
                     self.log_signal.emit(f"无法读取 '{img_name}' 图片，任务停止")
                     return
 
-                h, w = recognition_image.shape
+                h, w = recognition_image.shape[:2]
 
-                while cap.isOpened() and second_count < duration:
-                    cap.set(cv2.CAP_PROP_POS_MSEC, second_count * 1000)  # 设置视频位置为每秒
+                second_count = 0
+                while second_count < duration:
+                    cap.set(cv2.CAP_PROP_POS_MSEC, second_count * 1000)
                     ret, frame = cap.read()
                     if not ret:
                         break
 
-                    # 将帧转换为灰度图像
-                    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-                    # 使用模板匹配找到匹配区域
-                    res = cv2.matchTemplate(gray_frame, recognition_image, cv2.TM_CCOEFF_NORMED)
+                    res = cv2.matchTemplate(frame, recognition_image, cv2.TM_CCOEFF_NORMED)
                     min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
 
                     top_left = max_loc
                     bottom_right = (top_left[0] + w, top_left[1] + h)
 
-                    # 裁剪匹配区域
-                    crop_image = gray_frame[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
+                    crop_image = frame[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
 
-                    # 保存处理后的图片，使用cv2.imencode和tofile处理中文路径
+                    if grayscale_option:
+                        crop_image = cv2.cvtColor(crop_image, cv2.COLOR_BGR2GRAY)
+
                     frame_name = os.path.join(folder_path, f"{task_name}_{folder_name}_{second_count:02d}.png")
                     cv2.imencode('.png', crop_image)[1].tofile(frame_name)
                     self.log_signal.emit(f"保存图片: {frame_name}")
 
-                    second_count += 1
+                    second_count += frame_interval
                     step_count += 1
                     self.progress_signal.emit(int((step_count / total_steps) * 100))
 
                 self.log_signal.emit(f"'{img_name}' 截取完毕")
-                second_count = 0  # 重置second_count以处理下一个识别图片
 
             cap.release()
             self.log_signal.emit("截取图片完毕，正在执行识别初始化...")
 
-            # 在单独的线程中运行OCR模型
             ocr_thread = Thread(target=run_ocr, args=(
-            self.task, self.log_signal, self.progress_signal, self.result_signal, total_steps))
+                self.task, self.log_signal, self.progress_signal, self.result_signal, total_steps))
             ocr_thread.start()
 
             while ocr_thread.is_alive():
@@ -357,9 +366,9 @@ class TaskListInterface(QWidget):
 
         self.table_widget.setWordWrap(False)
         self.table_widget.setRowCount(0)
-        self.table_widget.setColumnCount(7)
+        self.table_widget.setColumnCount(9)  # 增加两列
         self.table_widget.setHorizontalHeaderLabels(
-            ['任务名', '识别模型', '导出选项', '视频路径', '识别图片路径', '替换选项', '替换文本'])
+            ['任务名', '识别模型', '导出选项', '视频路径', '识别图片路径', '替换选项', '替换文本', '帧提取间隔', '灰度图像选项'])  # 新增列头
         self.table_widget.verticalHeader().hide()
 
         # 设置列宽
@@ -372,6 +381,8 @@ class TaskListInterface(QWidget):
         self.table_widget.setColumnWidth(4, 120)
         self.table_widget.setColumnWidth(5, 120)
         self.table_widget.setColumnWidth(6, 100)
+        self.table_widget.setColumnWidth(7, 100)  # 新增列宽
+        self.table_widget.setColumnWidth(8, 120)  # 新增列宽
 
         self.main_layout.addWidget(self.table_widget)
 
@@ -440,7 +451,7 @@ class TaskListInterface(QWidget):
         self.task_progress = {}
         self.task_results = {}
 
-    def add_task(self, task_name, model, export_option, file_path, replace_option, image_path, replace_text):
+    def add_task(self, task_name, model, export_option, file_path, replace_option, image_path, replace_text, frame_interval, grayscale_option):
         """
         添加新的任务到任务列表。
 
@@ -452,6 +463,8 @@ class TaskListInterface(QWidget):
             replace_option (str): 替换选项
             image_path (str): 识别图片路径
             replace_text (str): 替换文本
+            frame_interval (str): 帧提取间隔
+            grayscale_option (str): 灰度图像选项
         """
         row_position = self.table_widget.rowCount()
         self.table_widget.insertRow(row_position)
@@ -463,6 +476,8 @@ class TaskListInterface(QWidget):
         self.table_widget.setItem(row_position, 4, self.create_non_editable_item(image_path))
         self.table_widget.setItem(row_position, 5, self.create_non_editable_item(replace_option))
         self.table_widget.setItem(row_position, 6, self.create_non_editable_item(replace_text))
+        self.table_widget.setItem(row_position, 7, self.create_non_editable_item(frame_interval))  # 新增列
+        self.table_widget.setItem(row_position, 8, self.create_non_editable_item(grayscale_option))  # 新增列
 
         # 初始化日志和进度
         self.task_logs[task_name] = []
@@ -591,7 +606,9 @@ class TaskListInterface(QWidget):
             'file_path': self.table_widget.item(selected_row, 3).text(),
             'recognition_image_path': self.table_widget.item(selected_row, 4).text(),
             'replace_option': self.table_widget.item(selected_row, 5).text(),
-            'replace_text': self.table_widget.item(selected_row, 6).text()
+            'replace_text': self.table_widget.item(selected_row, 6).text(),
+            'frame_interval': self.table_widget.item(selected_row, 7).text(),
+            'grayscale_option': self.table_widget.item(selected_row, 8).text()
         }
 
         self.log_text.append(f"开始执行任务: {task['task_name']}")
