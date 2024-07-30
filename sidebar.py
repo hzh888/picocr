@@ -41,7 +41,7 @@ class Window(FluentWindow):
         )
 
     def initWindow(self):
-        self.resize(875, 630)
+        self.resize(980, 695)
         self.setWindowIcon(QIcon('resource/logo.png'))
         self.setWindowTitle('PicOCR')
 
