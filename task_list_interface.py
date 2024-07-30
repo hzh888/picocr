@@ -11,13 +11,13 @@ from openpyxl import Workbook
 from openpyxl.drawing.image import Image
 from openpyxl.styles import Border, Side
 from openpyxl.utils import get_column_letter
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidgetItem, QHeaderView, QSpacerItem, QSizePolicy, QHBoxLayout
-from qfluentwidgets import TableWidget, PushButton, ProgressRing, InfoBar, InfoBarPosition, TextEdit
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl
+from PyQt6.QtGui import QColor, QDesktopServices
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidgetItem, QHeaderView, QSpacerItem, QSizePolicy, QHBoxLayout, QDialog, QLabel
+from qfluentwidgets import TableWidget, PushButton, ProgressRing, InfoBar, InfoBarPosition, TextEdit, MessageBox
 import numpy as np
 
-def run_ocr(task, log_signal, progress_signal, result_signal, total_steps):
+def run_ocr(task, log_signal, progress_signal, result_signal, total_steps, thread_stop_flag):
     try:
         recognition_image_paths = task['recognition_image_path'].split(",")
         model = task['model']
@@ -38,17 +38,23 @@ def run_ocr(task, log_signal, progress_signal, result_signal, total_steps):
         ocr_results = {}
 
         for img_name in recognition_image_paths:
+            if thread_stop_flag['stop']:
+                log_signal.emit("OCR任务已停止")
+                result_signal.emit((task_name, ocr_results))
+                return
             img_name = img_name.strip()
             log_signal.emit(f"识别 '{img_name}' 开始")
             full_path = os.path.join("Identifyimages", task_name, img_name)
             if not os.path.exists(full_path):
                 log_signal.emit(f"'{img_name}' 图片不存在，任务停止")
+                result_signal.emit((task_name, ocr_results))
                 return
 
             folder_name = img_name.split('.')[0]
             folder_path = os.path.join(imagestorage_dir, folder_name)
             if not os.path.exists(folder_path):
                 log_signal.emit(f"'{folder_name}' 文件夹不存在，任务停止")
+                result_signal.emit((task_name, ocr_results))
                 return
 
             ocr_results[img_name] = []
@@ -56,14 +62,23 @@ def run_ocr(task, log_signal, progress_signal, result_signal, total_steps):
             image_files = natsorted(os.listdir(folder_path))
 
             for image_file in image_files:
+                if thread_stop_flag['stop']:
+                    log_signal.emit("OCR任务已停止")
+                    result_signal.emit((task_name, ocr_results))
+                    return
                 img_path = os.path.join(folder_path, image_file)
                 image = cv2.imdecode(np.fromfile(img_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
                 if image is None:
                     log_signal.emit(f"无法读取 '{image_file}' 图片，任务停止")
+                    result_signal.emit((task_name, ocr_results))
                     return
 
                 contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 for contour in contours:
+                    if thread_stop_flag['stop']:
+                        log_signal.emit("OCR任务已停止")
+                        result_signal.emit((task_name, ocr_results))
+                        return
                     x, y, w, h = cv2.boundingRect(contour)
                     char_image = image[y:y + h, x:x + w]
 
@@ -111,16 +126,17 @@ def replace_text_in_result(result, replace_option, replace_text):
             result = result.replace(text, "")
     return result
 
-
 class ImageProcessingThread(QThread):
     log_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(int)
     task_complete_signal = pyqtSignal(str)
     result_signal = pyqtSignal(object)
 
-    def __init__(self, task):
+    def __init__(self, task, stop_flag):
         super().__init__()
         self.task = task
+        self.stop_flag = stop_flag
+        self.ocr_running = False
 
     def run(self):
         try:
@@ -155,6 +171,9 @@ class ImageProcessingThread(QThread):
             step_count = 0
 
             for img_name in recognition_image_paths:
+                if self.stop_flag['stop']:
+                    self.log_signal.emit("任务已停止")
+                    return
                 img_name = img_name.strip()
                 folder_name = img_name.split('.')[0]
                 folder_path = os.path.join(imagestorage_dir, folder_name)
@@ -185,6 +204,9 @@ class ImageProcessingThread(QThread):
 
                 second_count = 0
                 while second_count < duration:
+                    if self.stop_flag['stop']:
+                        self.log_signal.emit("任务已停止")
+                        return
                     cap.set(cv2.CAP_PROP_POS_MSEC, second_count * 1000)
                     ret, frame = cap.read()
                     if not ret:
@@ -211,16 +233,23 @@ class ImageProcessingThread(QThread):
             cap.release()
             self.log_signal.emit("截取图片完毕，正在执行识别初始化...")
 
+            self.ocr_running = True
             ocr_thread = Thread(target=run_ocr, args=(
-                self.task, self.log_signal, self.progress_signal, self.result_signal, total_steps))
+                self.task, self.log_signal, self.progress_signal, self.result_signal, total_steps, self.stop_flag))
             ocr_thread.start()
 
             while ocr_thread.is_alive():
+                if self.stop_flag['stop']:
+                    self.log_signal.emit("任务已停止")
+                    self.ocr_running = False
+                    return
                 time.sleep(0.1)
 
             ocr_thread.join()
+            self.ocr_running = False
 
-            self.task_complete_signal.emit(task_name)
+            if not self.stop_flag['stop']:
+                self.task_complete_signal.emit(task_name)
 
         except Exception as e:
             self.log_signal.emit(f"处理过程中出现错误: {e}")
@@ -296,6 +325,8 @@ class ImageProcessingThread(QThread):
                 os.rmdir(os.path.join(root, name))
         os.rmdir(folder_path)
 
+    def stop(self):
+        self.stop_flag['stop'] = True
 
 class TaskListInterface(QWidget):
     def __init__(self, parent=None):
@@ -315,7 +346,7 @@ class TaskListInterface(QWidget):
         self.table_widget.setRowCount(0)
         self.table_widget.setColumnCount(9)
         self.table_widget.setHorizontalHeaderLabels(
-            ['任务名', '识别模型', '导出选项', '视频路径', '识别图片路径', '替换选项', '替换文本', '帧提取间隔', '灰度图像选项'])
+            ['任务名', '识别模型', '导出选项', '视频路径', '识别图片路径', '替换选项', '替换文本', '提取间隔', '灰度图像选项'])
         self.table_widget.verticalHeader().hide()
 
         self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
@@ -340,6 +371,8 @@ class TaskListInterface(QWidget):
 
         self.start_button = PushButton('开始执行', self)
         self.start_button.clicked.connect(self.start_task)
+        self.stop_button = PushButton('停止任务', self)
+        self.stop_button.clicked.connect(self.stop_task)
         self.delete_button = PushButton('删除任务', self)
         self.delete_button.clicked.connect(self.delete_selected_row)
         self.clear_log_button = PushButton('清空日志', self)
@@ -350,6 +383,7 @@ class TaskListInterface(QWidget):
 
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.delete_button)
+        button_layout.addWidget(self.stop_button)
         button_layout.addWidget(self.clear_log_button)
 
         control_layout = QVBoxLayout()
@@ -385,6 +419,7 @@ class TaskListInterface(QWidget):
         self.table_widget.itemSelectionChanged.connect(self.on_task_selected)
 
         self.threads = {}
+        self.stop_flags = {}  # Initialize stop_flags attribute
         self.task_logs = {}
         self.task_progress = {}
         self.task_results = {}
@@ -459,6 +494,8 @@ class TaskListInterface(QWidget):
             del self.threads[task_name]
         if task_name in self.task_results:
             del self.task_results[task_name]
+        if task_name in self.stop_flags:
+            del self.stop_flags[task_name]
 
         self.delete_task_files(task_name)
 
@@ -508,21 +545,61 @@ class TaskListInterface(QWidget):
             self.show_info_bar('任务已在执行中', 'error')
             return
 
-        processing_thread = ImageProcessingThread(task)
+        stop_flag = {'stop': False}
+        processing_thread = ImageProcessingThread(task, stop_flag)
         processing_thread.log_signal.connect(lambda msg, t=task['task_name']: self.update_log(t, msg))
         processing_thread.progress_signal.connect(lambda value, t=task['task_name']: self.update_progress(t, value))
         processing_thread.task_complete_signal.connect(lambda t=task['task_name']: self.on_task_complete(t))
         processing_thread.result_signal.connect(self.handle_ocr_results)
 
         self.threads[task['task_name']] = processing_thread
+        self.stop_flags[task['task_name']] = stop_flag
         processing_thread.start()
 
         self.set_task_row_color(selected_row, QColor("#f3d6ac"))
 
+    def stop_task(self):
+        selected_items = self.table_widget.selectedItems()
+        if not selected_items:
+            self.show_info_bar('请选择任务', 'error')
+            return
+
+        selected_row = self.table_widget.row(selected_items[0])
+        task_name = self.table_widget.item(selected_row, 0).text()
+
+        if task_name not in self.threads or not self.threads[task_name].isRunning():
+            self.show_info_bar('任务未在执行过程中', 'error')
+            return
+
+        self.stop_flags[task_name]['stop'] = True
+        self.show_info_bar('任务停止成功', 'success')
+
+        # 设置任务行颜色为#FF6347
+        self.set_task_row_color(selected_row, QColor("#FA8072"))
+
+        # 仅在OCR过程中弹出导出对话框
+        if self.threads[task_name].ocr_running:
+            self.show_export_dialog(task_name)
+
+    def show_export_dialog(self, task_name):
+        w = MessageBox(
+            '说明',
+            '需要导出已识别的结果吗？',
+            self
+        )
+        w.yesButton.setText('导出')
+        w.cancelButton.setText('不导出')
+        if w.exec():
+            if task_name in self.task_results:
+                self.threads[task_name].export_results(task_name, self.task_results[task_name])
+        else:
+            self.show_info_bar('结果未导出', 'info')
+
     def handle_ocr_results(self, result):
         task_name, ocr_results = result
         self.task_results[task_name] = ocr_results
-        self.threads[task_name].export_results(task_name, ocr_results)
+        if not self.stop_flags[task_name]['stop']:  # Add this condition
+            self.threads[task_name].export_results(task_name, ocr_results)
 
     def on_task_selected(self):
         selected_items = self.table_widget.selectedItems()
@@ -541,10 +618,11 @@ class TaskListInterface(QWidget):
             self.update_progress(task_name, self.task_progress[task_name])
 
     def on_task_complete(self, task_name):
-        self.show_info_bar(f'{task_name}任务完成', 'success')
-        row_position = self.find_task_row(task_name)
-        if row_position is not None:
-            self.set_task_row_color(row_position, QColor("#c9eabe"))
+        if not self.stop_flags[task_name]['stop']:  # Add this condition
+            self.show_info_bar(f'{task_name}任务完成', 'success')
+            row_position = self.find_task_row(task_name)
+            if row_position is not None:
+                self.set_task_row_color(row_position, QColor("#c9eabe"))
 
     def find_task_row(self, task_name):
         for row in range(self.table_widget.rowCount()):
