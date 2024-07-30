@@ -178,6 +178,13 @@ class Addtaskinterface(QWidget):
 
         self.info_layout.addWidget(self.label)
 
+        frame_button_layout = QHBoxLayout()
+        self.get_frame_button = PushButton("框选识别区域", self)
+        self.get_frame_button.clicked.connect(self.get_current_frame)
+        frame_button_layout.addWidget(self.get_frame_button)
+        frame_button_layout.setContentsMargins(0, 9, 0, 6)
+        self.info_layout.addLayout(frame_button_layout)
+
         control_card = ElevatedCardWidget(self)
         control_card.setFixedHeight(100)
         control_layout = QVBoxLayout()
@@ -233,13 +240,6 @@ class Addtaskinterface(QWidget):
 
         self.info_layout.addWidget(control_card)
         self.info_layout.setContentsMargins(0, 10, 0, 0)
-
-        frame_button_layout = QHBoxLayout()
-        self.get_frame_button = PushButton("框选识别区域", self)
-        self.get_frame_button.clicked.connect(self.get_current_frame)
-        frame_button_layout.addWidget(self.get_frame_button)
-        frame_button_layout.setContentsMargins(0, 9, 0, 0)
-        self.info_layout.addLayout(frame_button_layout)
 
         scroll_area_layout.addLayout(file_layout)
         scroll_area_layout.addLayout(capture_layout)
