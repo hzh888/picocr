@@ -97,10 +97,10 @@ class Addtaskinterface(QWidget):
         self.frame_interval_entry.setText("1")
 
         self.dropdown1 = ComboBox(self)
-        self.dropdown1.addItems(["Ddddocr模型", "Paddle模型"])
+        self.dropdown1.addItems(["Ddddocr模型", "Paddle模型", "云端OCR(联网)"])
 
         self.grayscale_dropdown = ComboBox(self)
-        self.grayscale_dropdown.addItems(["转换灰度图像", "不转换灰度图像"])
+        self.grayscale_dropdown.addItems(["转换灰度图像", "不转换灰度图像" ,"转换灰度图像(固定二值化)", "转换灰度图像(自适应二值化)"])
 
         self.dropdown3 = ComboBox(self)
         self.dropdown3.addItems(["导出表格", "不导出表格"])
