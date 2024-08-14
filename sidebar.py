@@ -43,7 +43,7 @@ class Window(FluentWindow):
     def initWindow(self):
         self.resize(980, 695)
         self.setWindowIcon(QIcon('resource/logo.png'))
-        self.setWindowTitle('PicOCR')
+        self.setWindowTitle('PicOCR V1.2')
 
     def showMessageBox(self):
         w = MessageBox(
