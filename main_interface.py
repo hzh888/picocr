@@ -1,18 +1,34 @@
-# coding:utf-8
 import re
 import os
 import shutil
-from PyQt6.QtCore import Qt, QTimer, QRegularExpression, QByteArray
+import requests
+import cv2
+from PyQt6.QtCore import Qt, QTimer, QRegularExpression, QByteArray, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QRegularExpressionValidator, QIcon, QPainter
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QFrame, QLabel, QSizePolicy
 from qfluentwidgets import PushButton, LineEdit, ComboBox, FluentIcon as FIF, InfoBar, InfoBarPosition, MessageBox, \
-    Slider, ToolButton, ElevatedCardWidget, SingleDirectionScrollArea
-import cv2
-from picture_popup import ImageDialog
+    Slider, ToolButton, ElevatedCardWidget, SingleDirectionScrollArea, QConfig, OptionsConfigItem, OptionsValidator, \
+    qconfig
 from Identifyimages import IdentifyImagesDialog
+from picture_popup import ImageDialog
 
+# 定义网络检测线程类
+class NetworkCheckThread(QThread):
+    network_checked = pyqtSignal(bool)
 
+    def run(self):
+        has_network = self.check_network_connection()
+        self.network_checked.emit(has_network)
+
+    def check_network_connection(self):
+        try:
+            requests.get('https://www.baidu.com', timeout=5)
+            return True
+        except requests.ConnectionError:
+            return False
+
+# 定义SVG图标转换为QIcon的函数
 def svg_to_icon(svg_data):
     svg_renderer = QSvgRenderer(QByteArray(svg_data.encode()))
     pixmap = QPixmap(200, 200)
@@ -23,6 +39,7 @@ def svg_to_icon(svg_data):
     return QIcon(pixmap)
 
 
+# 定义SVG图标
 play_svg = """
 <svg t="1719457742458" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="1214" width="200" height="200"><path d="M783.74 401.86L372.23 155.28c-85.88-51.46-195.08 10.41-195.08 110.53v493.16c0 100.12 109.2 161.99 195.08 110.53l411.51-246.58c83.5-50.04 83.5-171.03 0-221.06z" p-id="1215"></path></svg>
 """
@@ -39,7 +56,24 @@ forward_svg = """
 <svg t="1719458670424" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="1063" width="200" height="200"><path d="M665.47 417.65l-345.03-244.3c-69.8-49.42-166.29 0.49-166.29 86.01v502.27c0 85.52 96.49 135.43 166.29 86.01l345.03-244.31c64.02-45.34 64.02-140.34 0-185.68zM811.82 868.52c-30.38 0-55-24.62-55-55V207.46c0-30.38 24.62-55 55-55s55 24.62 55 55v606.07c0 30.37-24.62 54.99-55 54.99z" p-id="1064"></path></svg>
 """
 
+# 定义配置类
+class Config(QConfig):
+    ocrApiUrl = OptionsConfigItem(
+        "BaiduOCR", "ApiUrl", "", OptionsValidator([
+            "https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic?access_token=",
+            "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic?access_token="
+        ])
+    )
+    apiKey = OptionsConfigItem("BaiduOCR", "ApiKey", "")
+    secretKey = OptionsConfigItem("BaiduOCR", "SecretKey", "")
+    authCode = OptionsConfigItem("Authorization", "AuthCode", "")
 
+
+# 实例化配置
+cfg = Config()
+
+
+# 定义主界面类
 class Addtaskinterface(QWidget):
     def __init__(self, task_list_interface, parent=None):
         super().__init__(parent)
@@ -97,10 +131,13 @@ class Addtaskinterface(QWidget):
         self.frame_interval_entry.setText("1")
 
         self.dropdown1 = ComboBox(self)
-        self.dropdown1.addItems(["Ddddocr模型", "Paddle模型"])
+        self.dropdown1.addItems(["Ddddocr模型", "Paddle模型"])  # 初始化时不显示云端和百度OCR选项
+        self.cloud_options = ["云端OCR(联网)", "百度OCR(联网)"]  # 存储云端和百度OCR选项
+        self.dropdown1.currentIndexChanged.connect(self.check_auth_code)
 
         self.grayscale_dropdown = ComboBox(self)
-        self.grayscale_dropdown.addItems(["转换灰度图像", "不转换灰度图像"])
+        self.grayscale_dropdown.addItems(
+            ["转换灰度图像", "不转换灰度图像", "转换灰度图像(固定二值化)", "转换灰度图像(自适应二值化)"])
 
         self.dropdown3 = ComboBox(self)
         self.dropdown3.addItems(["导出表格", "不导出表格"])
@@ -264,6 +301,32 @@ class Addtaskinterface(QWidget):
         self.is_slider_pressed = False
         self.was_playing_before_drag = False
 
+        # 启动网络检测线程
+        self.network_thread = NetworkCheckThread()
+        self.network_thread.network_checked.connect(self.update_dropdown1)
+        self.network_thread.finished.connect(self.cleanup_thread)  # 线程完成时进行清理
+        self.network_thread.start()
+
+    def update_dropdown1(self, has_network):
+        if has_network:
+            self.dropdown1.addItems(self.cloud_options)
+        else:
+            msg_box = MessageBox(
+                title='提示',
+                content=(
+                    '当前网络连接失败，无法使用“云端OCR(联网)”和“百度OCR(联网)”识别模型，'
+                    '联网识别模型无网络下默认不显示，本地模型可以正常使用，'
+                    '如需使用联网识别模型请连接网络后并重新打开本软件即可。'
+                ),
+                parent=self
+            )
+            msg_box.cancelButton.hide()
+            msg_box.exec()
+
+    def cleanup_thread(self):
+        # 线程结束后，释放资源
+        self.network_thread.deleteLater()
+
     def select_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, '选择文件', '', '视频文件 (*.mkv *.mov *.wmv *.mp4 *.avi)')
         if file_path:
@@ -296,6 +359,64 @@ class Addtaskinterface(QWidget):
             for layout in self.additional_input_layouts:
                 for i in range(layout.count()):
                     layout.itemAt(i).widget().hide()
+
+    def check_auth_code(self):
+        selected_text = self.dropdown1.currentText()
+        if selected_text in ["云端OCR(联网)", "百度OCR(联网)"]:
+            # 每次选择时重新读取配置文件
+            qconfig.load("config.json", cfg)
+
+            if selected_text == "云端OCR(联网)":
+                auth_code = cfg.authCode.value
+                if not auth_code:
+                    msg_box = MessageBox(
+                        title='未配置云端OCR授权码',
+                        content=(
+                            '云端OCR授权码是永久免费生成的，这样做是为了避免有人疯狂调用接口做的限制而已，'
+                            '云端OCR一天总共可以识别5万次，注意！是总共5万次！不是单个授权码5万次！'
+                            '\n\n授权码免费生成地址：api.fxgnt.cn'
+                        ),
+                        parent=self
+                    )
+                    msg_box.cancelButton.hide()  # 隐藏取消按钮
+                    msg_box.buttonLayout.insertStretch(1)  # 插入空白伸缩空间
+                    msg_box.accepted.connect(lambda: self.handle_empty_auth_code("AuthCode"))
+                    msg_box.exec()
+
+            elif selected_text == "百度OCR(联网)":
+                api_key = cfg.apiKey.value
+                secret_key = cfg.secretKey.value
+                missing_configs = []
+
+                if not api_key:
+                    missing_configs.append("ApiKey")
+                if not secret_key:
+                    missing_configs.append("SecretKey")
+
+                if missing_configs:
+                    msg_box = MessageBox(
+                        title='未配置百度OCR信息',
+                        content=(
+                            f'未配置百度OCR: “{", ".join(missing_configs)}”，请配置相关信息，避免无法使用！'
+                        ),
+                        parent=self
+                    )
+                    msg_box.cancelButton.hide()  # 隐藏取消按钮
+                    msg_box.buttonLayout.insertStretch(1)  # 插入空白伸缩空间
+                    msg_box.accepted.connect(lambda: self.handle_empty_auth_code("BaiduOCR"))
+                    msg_box.exec()
+
+    def handle_empty_auth_code(self, ocr_type):
+        # 重新检查配置项
+        qconfig.load("config.json", cfg)
+
+        if ocr_type == "AuthCode":
+            if not cfg.authCode.value:
+                self.dropdown1.setCurrentText("Ddddocr模型")
+
+        elif ocr_type == "BaiduOCR":
+            if not cfg.apiKey.value or not cfg.secretKey.value:
+                self.dropdown1.setCurrentText("Ddddocr模型")
 
     def add_additional_input(self):
         layout = QHBoxLayout()
@@ -367,6 +488,55 @@ class Addtaskinterface(QWidget):
             )
 
     def button_action(self):
+        # 首先检查当前选择的OCR模型是否需要授权码
+        selected_text = self.dropdown1.currentText()
+        if selected_text in ["云端OCR(联网)", "百度OCR(联网)"]:
+            # 重新加载配置文件
+            qconfig.load("config.json", cfg)
+
+            if selected_text == "云端OCR(联网)":
+                auth_code = cfg.authCode.value
+                if not auth_code:
+                    msg_box = MessageBox(
+                        title='未配置云端OCR授权码',
+                        content=(
+                            '云端OCR授权码是永久免费生成的，这样做是为了避免有人疯狂调用接口做的限制而已，'
+                            '云端OCR一天总共可以识别5万次，注意！是总共5万次！不是单个授权码5万次！'
+                            '\n\n授权码免费生成地址：api.fxgnt.cn'
+                        ),
+                        parent=self
+                    )
+                    msg_box.cancelButton.hide()  # 隐藏取消按钮
+                    msg_box.buttonLayout.insertStretch(1)  # 插入空白伸缩空间
+                    msg_box.accepted.connect(lambda: self.handle_empty_auth_code("AuthCode"))
+                    msg_box.exec()
+                    return  # 等待用户确认后再继续执行
+
+            elif selected_text == "百度OCR(联网)":
+                api_key = cfg.apiKey.value
+                secret_key = cfg.secretKey.value
+                missing_configs = []
+
+                if not api_key:
+                    missing_configs.append("ApiKey")
+                if not secret_key:
+                    missing_configs.append("SecretKey")
+
+                if missing_configs:
+                    msg_box = MessageBox(
+                        title='未配置百度OCR信息',
+                        content=(
+                            f'未配置百度OCR: “{", ".join(missing_configs)}”，请配置相关信息，避免无法使用！'
+                        ),
+                        parent=self
+                    )
+                    msg_box.cancelButton.hide()  # 隐藏取消按钮
+                    msg_box.buttonLayout.insertStretch(1)  # 插入空白伸缩空间
+                    msg_box.accepted.connect(lambda: self.handle_empty_auth_code("BaiduOCR"))
+                    msg_box.exec()
+                    return  # 等待用户确认后再继续执行
+
+        # 继续原来的任务添加逻辑
         file_path = self.file_entry.text()
         task_name = self.input_entry.text()
         model = self.dropdown1.currentText()
@@ -375,6 +545,7 @@ class Addtaskinterface(QWidget):
         image_path = self.capture_entry.text()
         frame_interval = self.frame_interval_entry.text()
         grayscale_option = self.grayscale_dropdown.currentText()
+
 
         if not file_path:
             self.show_info_bar('文件路径不能为空', 'error')
@@ -657,3 +828,4 @@ class Addtaskinterface(QWidget):
                 os.remove(file_path)
         self.capture_entry.clear()
         self.show_info_bar('图片已清空', 'success')
+
