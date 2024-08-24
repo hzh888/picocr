@@ -21,10 +21,68 @@ from qfluentwidgets import (
 import numpy as np
 import requests
 import base64
+import urllib.parse  # 导入urllib.parse用于URL编码
 from pymediainfo import MediaInfo
 from datetime import datetime, timedelta
 import pytz
+from requests.exceptions import RequestException  # 导入RequestException
 
+def load_auth_code(log_signal):
+    """从config.json文件加载AuthCode"""
+    try:
+        if not os.path.exists('config.json'):
+            log_signal.emit("config.json配置文件获取失败")
+            return None
+
+        with open('config.json', 'r', encoding='utf-8') as config_file:
+            config_data = json.load(config_file)
+            auth_code = config_data.get("Authorization", {}).get("AuthCode", "")
+            if not auth_code:
+                log_signal.emit("未配置云端OCR授权码")
+                return None
+            return auth_code
+    except (json.JSONDecodeError, KeyError):
+        log_signal.emit("未配置云端OCR授权码")
+        return None
+
+def get_baidu_credentials(log_signal):
+    """从config.json文件加载百度OCR的API_KEY、SECRET_KEY和URL"""
+    try:
+        if not os.path.exists('config.json'):
+            log_signal.emit("config.json配置文件获取失败")
+            return None, None, None
+
+        with open('config.json', 'r', encoding='utf-8') as config_file:
+            config_data = json.load(config_file)
+            api_key = config_data.get("BaiduOCR", {}).get("ApiKey", "")
+            secret_key = config_data.get("BaiduOCR", {}).get("SecretKey", "")
+            url = config_data.get("BaiduOCR", {}).get("ApiUrl", "")
+
+            if not api_key:
+                log_signal.emit("未配置百度OCR的API_KEY")
+            if not secret_key:
+                log_signal.emit("未配置百度OCR的SECRET_KEY")
+            if not url:
+                log_signal.emit("未配置百度OCR的ApiUrl")
+
+            if not api_key or not secret_key or not url:
+                return None, None, None
+            return api_key, secret_key, url
+    except (json.JSONDecodeError, KeyError):
+        log_signal.emit("读取config.json配置时发生错误")
+        return None, None, None
+
+def get_access_token(api_key, secret_key, log_signal):
+    """使用API_KEY和SECRET_KEY获取百度OCR的access_token"""
+    url = "https://aip.baidubce.com/oauth/2.0/token"
+    params = {"grant_type": "client_credentials", "client_id": api_key, "client_secret": secret_key}
+    try:
+        response = requests.post(url, params=params)
+        response.raise_for_status()  # 如果返回错误状态码，抛出异常
+        return str(response.json().get("access_token"))
+    except RequestException:
+        log_signal.emit("网络连接失败")
+        return None
 
 def replace_text_in_result(result, replace_option, replace_text):
     if replace_option == "替换文本":
@@ -38,13 +96,12 @@ def replace_text_in_result(result, replace_option, replace_text):
             result = result.replace(text, "")
     return result
 
-
 class ImageProcessingThread(QThread):
     log_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(int)
     task_complete_signal = pyqtSignal(str)
     result_signal = pyqtSignal(object)
-    image_visualization_signal = pyqtSignal(str, str)  # Signal to update image visualization
+    image_visualization_signal = pyqtSignal(str, str)
 
     def __init__(self, task, stop_flag):
         super().__init__()
@@ -125,12 +182,10 @@ class ImageProcessingThread(QThread):
                             x, y, w, h = rect["left"], rect["top"], rect["width"], rect["height"]
                             crop_image = frame[y:y + h, x:x + w]
 
-                            # 修改后的灰度转换逻辑
                             if grayscale_option in ["转换灰度图像", "转换灰度图像二值化", "转换灰度图像(固定二值化)"]:
                                 crop_image = cv2.cvtColor(crop_image, cv2.COLOR_BGR2GRAY)
 
                             if grayscale_option == "转换灰度图像二值化":
-                                # 使用自适应阈值进行二值化
                                 crop_image = cv2.adaptiveThreshold(
                                     crop_image, 255,
                                     cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -139,14 +194,12 @@ class ImageProcessingThread(QThread):
                                 )
 
                             elif grayscale_option == "转换灰度图像(固定二值化)":
-                                # 使用固定阈值进行二值化，阈值为127
                                 _, crop_image = cv2.threshold(crop_image, 127, 255, cv2.THRESH_BINARY)
 
                             frame_name = os.path.join(folder_path, f"{task_name}_{folder_name}_{second_count:02d}.png")
                             cv2.imencode('.png', crop_image)[1].tofile(frame_name)
                             self.log_signal.emit(f"保存图片: {frame_name}")
 
-                            # Emit signal to update image visualization during conversion
                             self.image_visualization_signal.emit(task_name, frame_name)
 
                     second_count += frame_interval
@@ -168,7 +221,7 @@ class ImageProcessingThread(QThread):
             self.log_signal.emit(f"处理过程中出现错误: {e}")
 
         finally:
-            self.release_model()  # Ensure the model is released after the task completes or is stopped
+            self.release_model()
 
     def initialize_model(self):
         """Initialize the OCR model based on the task model type."""
@@ -192,7 +245,6 @@ class ImageProcessingThread(QThread):
     def run_ocr(self, task_name, recognition_image_paths, total_steps):
         """Perform the OCR operation for the task."""
         try:
-            # Initialize the OCR model at the start of OCR processing
             self.initialize_model()
 
             model = self.task['model']
@@ -202,6 +254,25 @@ class ImageProcessingThread(QThread):
 
             step_count = total_steps // 2
             ocr_results = {}
+
+            if model == "百度OCR(联网)":
+                api_key, secret_key, base_url = get_baidu_credentials(self.log_signal)
+                if not api_key or not secret_key or not base_url:
+                    self.stop_flag['stop'] = True
+                    return
+
+                access_token = get_access_token(api_key, secret_key, self.log_signal)
+                if not access_token:
+                    self.stop_flag['stop'] = True
+                    return
+
+                url = base_url + access_token
+
+            else:
+                auth_code = load_auth_code(self.log_signal)
+                if not auth_code:
+                    self.stop_flag['stop'] = True
+                    return
 
             for img_name in recognition_image_paths:
                 if self.stop_flag['stop']:
@@ -237,53 +308,96 @@ class ImageProcessingThread(QThread):
                         image_data = image_file.read()
 
                     result = ""  # Initialize result
-                    if model == "云端OCR(联网)":
-                        # Convert image to base64 and send to the OCR API
+                    if model == "百度OCR(联网)":
                         image_base64 = base64.b64encode(image_data).decode('utf-8')
+                        image_base64_urlencoded = urllib.parse.quote(image_base64, safe='')
 
-                        while True:
+                        payload = f'image={image_base64_urlencoded}&detect_direction=false&detect_language=false&paragraph=false&probability=false'
+                        headers = {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'Accept': 'application/json'
+                        }
+
+                        retry = True
+                        while retry:
                             if self.stop_flag['stop']:
                                 self.log_signal.emit("OCR任务已停止")
                                 return
-                            response = requests.post(
-                                "https://api.fxgnt.cn/ocr/tyocr.php",
-                                data={'base64': image_base64}
-                            )
+                            try:
+                                response = requests.request("POST", url, headers=headers, data=payload)
 
-                            # Print the full JSON response to the console
-                            print(f"API Response for {image_filename}: {response.json()}")
+                                if response.status_code == 200:
+                                    result_json = response.json()
+                                    error_code = result_json.get("error_code")
 
-                            if response.status_code == 200:
-                                result_json = response.json()
-
-                                if result_json.get("error_code") == 18:
-                                    self.log_signal.emit("触发限流，2秒后再次识别")
-                                    time.sleep(2)  # Wait for 2 seconds before retrying
-                                    continue  # Retry the current image
-
-                                if result_json.get("error_code") == 17:
-                                    result = "识别次数不足"
-                                    self.log_signal.emit(f"图片 {image_filename} 的识别结果: {result}")
-                                    break  # Skip to the next image
-
-                                if "words_result" in result_json:
-                                    result = "".join([item["words"] for item in result_json["words_result"]])
+                                    if error_code == 18:
+                                        self.log_signal.emit("触发限流，2秒后再次识别")
+                                        time.sleep(2)
+                                        retry = True
+                                    elif error_code == 17:
+                                        result = "识别次数不足"
+                                        retry = False
+                                    else:
+                                        if "words_result" in result_json and result_json["words_result"]:
+                                            result = "".join([item["words"] for item in result_json["words_result"]])
+                                        else:
+                                            result = "识别失败"
+                                        retry = False
                                 else:
                                     result = "识别失败"
-                                    self.log_signal.emit(f"图片 {image_filename} 的识别结果: {result}")
-                                    break  # Skip to the next image if recognition fails
-                            else:
-                                result = "识别失败"
-                                self.log_signal.emit(f"图片 {image_filename} 的识别结果: {result}")
-                                break  # Skip to the next image if HTTP request fails
-                            break  # Exit the loop if no error
+                                    retry = False
+                            except RequestException:
+                                self.log_signal.emit("网络连接失败")
+                                self.stop_flag['stop'] = True
+                                return
+
+                    elif model == "云端OCR(联网)":
+                        image_base64 = base64.b64encode(image_data).decode('utf-8')
+
+                        retry = True
+                        while retry:
+                            if self.stop_flag['stop']:
+                                self.log_signal.emit("OCR任务已停止")
+                                return
+                            try:
+                                response = requests.post(
+                                    "https://api.fxgnt.cn/ocr/tyocr.php",
+                                    data={'base64': image_base64, 'auth': auth_code}
+                                )
+
+                                if response.status_code == 200:
+                                    result_json = response.json()
+
+                                    if result_json.get("error_code") == 403:
+                                        self.log_signal.emit("授权码不存在或可用次数不足")
+                                        self.stop_flag['stop'] = True
+                                        return
+
+                                    if result_json.get("error_code") == 18:
+                                        self.log_signal.emit("触发限流，2秒后再次识别")
+                                        time.sleep(2)
+                                        retry = True
+                                    elif result_json.get("error_code") == 17:
+                                        result = "识别次数不足"
+                                        retry = False
+                                    else:
+                                        if "words_result" in result_json and result_json["words_result"]:
+                                            result = "".join([item["words"] for item in result_json["words_result"]])
+                                        else:
+                                            result = "识别失败"
+                                        retry = False
+                                else:
+                                    result = "识别失败"
+                                    retry = False
+                            except RequestException:
+                                self.log_signal.emit("网络连接失败")
+                                self.stop_flag['stop'] = True
+                                return
 
                     else:
-                        # Local OCR processing
                         image = cv2.imdecode(np.fromfile(img_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
                         if image is None:
                             result = "识别失败"
-                            self.log_signal.emit(f"图片 {image_filename} 的识别结果: {result}")
                             ocr_results[img_name].append((image_filename, result))
                             continue
 
@@ -295,20 +409,21 @@ class ImageProcessingThread(QThread):
                                 result = ''.join([line[1][0] for line in paddle_result[0]])
                             else:
                                 result = "识别失败"
-                                self.log_signal.emit(f"图片 {image_filename} 的识别结果: {result}")
 
                     if not result:
                         result = "识别失败"
-                        self.log_signal.emit(f"图片 {image_filename} 的识别结果: {result}")
 
                     result = replace_text_in_result(result, replace_option, replace_text)
                     ocr_results[img_name].append((image_filename, result))
                     self.log_signal.emit(f"图片 {image_filename} 的识别结果: {result}")
 
-                    # Update the image visualization during OCR
                     self.image_visualization_signal.emit(task_name, img_path)
 
-                    time.sleep(0.15)  # Add a 150ms delay after processing each image
+                    # 根据模型设置不同的延迟时间
+                    if model == "百度OCR(联网)":
+                        time.sleep(1.5)  # 1.5秒延迟
+                    elif model == "云端OCR(联网)" or model == "Ddddocr模型" or model == "Paddle模型":
+                        time.sleep(0.2)  # 200ms延迟
 
                     step_count += 1
                     self.progress_signal.emit(int((step_count / total_steps) * 100))
@@ -323,7 +438,8 @@ class ImageProcessingThread(QThread):
             self.log_signal.emit(f"处理过程中出现错误: {e}")
 
         finally:
-            self.release_model()  # Ensure the model is released after OCR processing
+            self.release_model()
+
 
     def stop(self):
         self.stop_flag['stop'] = True
@@ -363,7 +479,7 @@ class ImageProcessingThread(QThread):
 
                 # 新增表头，调整列顺序，将“图片时间点”放在“原图”后面
                 worksheet.append([
-                    "图片文件", "识别结果", "原图", "图片时间点",
+                    "图片文件", "识别结果", "原图", "媒体时间点", "图片秒数点",
                     "识别模型", "替换选项", "替换文本", "提取间隔", "灰度图像选项"
                 ])
 
@@ -381,12 +497,22 @@ class ImageProcessingThread(QThread):
                     worksheet.cell(row=r_idx, column=1, value=image_file)
                     worksheet.cell(row=r_idx, column=2, value=result)
 
+                    # 提取图片的秒数点，假设文件名中包含了秒数信息
+                    try:
+                        # 从文件名中提取秒数点，例如文件名格式为 "taskname_foldername_10.png"
+                        # 其中的 "10" 是秒数点
+                        second_point = int(image_file.split('_')[-1].split('.')[0])
+                    except ValueError:
+                        second_point = "未知秒数"
+
+                    worksheet.cell(row=r_idx, column=5, value=second_point)
+
                     # 在每一行中加入这些信息
-                    worksheet.cell(row=r_idx, column=5, value=model)
-                    worksheet.cell(row=r_idx, column=6, value=replace_option)
-                    worksheet.cell(row=r_idx, column=7, value=replace_text)
-                    worksheet.cell(row=r_idx, column=8, value=frame_interval)
-                    worksheet.cell(row=r_idx, column=9, value=grayscale_option)
+                    worksheet.cell(row=r_idx, column=6, value=model)
+                    worksheet.cell(row=r_idx, column=7, value=replace_option)
+                    worksheet.cell(row=r_idx, column=8, value=replace_text)
+                    worksheet.cell(row=r_idx, column=9, value=frame_interval)
+                    worksheet.cell(row=r_idx, column=10, value=grayscale_option)
 
                     # 提取图片的时间点并计算真实时间
                     image_time_point = self.calculate_image_time(video_creation_time, image_file)
@@ -403,13 +529,13 @@ class ImageProcessingThread(QThread):
                     img.anchor = f'C{r_idx}'
                     worksheet.add_image(img)
 
-                    for col in range(1, 10):  # Update range to include new column
+                    for col in range(1, 11):  # Update range to include new column
                         cell = worksheet.cell(row=r_idx, column=col)
                         cell.border = thin_border
                         cell.alignment = center_alignment  # 设置对齐方式
 
                 # 设置表头的边框和对齐方式
-                for col in range(1, 10):  # Update range to include new column
+                for col in range(1, 11):  # Update range to include new column
                     header_cell = worksheet.cell(row=1, column=col)
                     header_cell.border = thin_border
                     header_cell.alignment = center_alignment  # 设置对齐方式
