@@ -43,6 +43,11 @@
 | 云端OCR(联网) | 
 | 百度OCR(联网) |
 
+## 云端OCR授权码获取
+云端OCR一天识别总额是5万次识别，不是单个授权码5万次，是全部授权码加起来5万次！
+
+永久免费获取授权码：[api.fxgnt.cn](https://api.fxgnt.cn/)
+
 ## 下载
 [PicOCR.zip](https://github.com/hzh888/picocr/releases/)
 
