@@ -1,4 +1,5 @@
-# coding:utf-8
+# sidebar.py
+
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QIcon, QDesktopServices
 from PyQt6.QtWidgets import QFrame, QHBoxLayout
@@ -7,7 +8,7 @@ from qfluentwidgets import NavigationItemPosition, FluentWindow, SubtitleLabel, 
 from qfluentwidgets import FluentIcon as FIF
 from main_interface import Addtaskinterface
 from task_list_interface import TaskListInterface
-
+from settingspage import SettingsPage  # 导入 SettingsPage
 
 class Widget(QFrame):
 
@@ -26,6 +27,7 @@ class Window(FluentWindow):
         super().__init__()
         self.task_list_interface = TaskListInterface(self)
         self.searchInterface = Addtaskinterface(self.task_list_interface, self)
+        self.settingInterface = SettingsPage(self)  # 初始化 SettingsPage
         self.initNavigation()
         self.initWindow()
 
@@ -39,6 +41,7 @@ class Window(FluentWindow):
             onClick=self.showMessageBox,
             position=NavigationItemPosition.BOTTOM,
         )
+        self.addSubInterface(self.settingInterface, FIF.SETTING, '设置', NavigationItemPosition.BOTTOM)  # 添加设置页面
 
     def initWindow(self):
         self.resize(980, 695)
