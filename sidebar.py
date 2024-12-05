@@ -1,5 +1,4 @@
-# sidebar.py
-
+# coding:utf-8
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QIcon, QDesktopServices
 from PyQt6.QtWidgets import QFrame, QHBoxLayout
@@ -46,7 +45,7 @@ class Window(FluentWindow):
     def initWindow(self):
         self.resize(980, 695)
         self.setWindowIcon(QIcon('resource/logo.png'))
-        self.setWindowTitle('PicOCR V1.2')
+        self.setWindowTitle('PicOCR V1.3')
 
     def showMessageBox(self):
         w = MessageBox(
