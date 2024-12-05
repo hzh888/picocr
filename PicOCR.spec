@@ -3,8 +3,8 @@
 
 a = Analysis(
     ['main.py'],
-    pathex=['G:\\chitoya\\picocr\\.venv\\Lib\\site-packages\\paddleocr','G:\\chitoya\\picocr\\.venv\\Lib\\site-packages\\paddle\\libs','G:\\chitoya\\picocr\\.venv\\Lib\\site-packages'],
-    binaries=[('G:\\chitoya\\picocr\\.venv\\Lib\\site-packages\\paddleocr','.'),('G:\\chitoya\\picocr\\.venv\\Lib\\site-packages\\paddle\\libs', '.'),('G:\chitoya\picocr\.venv\Lib\site-packages\shapely','.')],
+    pathex=['E:\\chitoya\\picocr\\.venv\\Lib\\site-packages\\paddleocr','E:\\chitoya\\picocr\\.venv\\Lib\\site-packages\\paddle\\libs','E:\\chitoya\\picocr\\.venv\\Lib\\site-packages'],
+    binaries=[('E:\\chitoya\\picocr\\.venv\\Lib\\site-packages\\paddleocr','.'),('E:\\chitoya\\picocr\\.venv\\Lib\\site-packages\\paddle\\libs', '.'),('E:\chitoya\picocr\.venv\Lib\site-packages\shapely','.')],
     datas=[('./models/onnxruntime_providers_shared.dll','onnxruntime\\capi'),('./models/common.onnx','ddddocr'),('./models/common_old.onnx','ddddocr')],
     hiddenimports=[],
     hookspath=[],
@@ -19,13 +19,16 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
-    name='PicOCR',
+    name='main',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -33,13 +36,4 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['resource\\logo.png'],
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='PicOCR',
 )
