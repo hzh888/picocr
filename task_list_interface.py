@@ -1,3 +1,4 @@
+# coding:utf-8
 import os
 import cv2
 import time
@@ -224,7 +225,6 @@ class ImageProcessingThread(QThread):
             self.release_model()
 
     def initialize_model(self):
-        """Initialize the OCR model based on the task model type."""
         model = self.task['model']
         if model == "Ddddocr模型":
             self.ocr_model = ddddocr.DdddOcr()
@@ -237,13 +237,11 @@ class ImageProcessingThread(QThread):
             )
 
     def release_model(self):
-        """Release the OCR model resources."""
         if self.ocr_model:
             del self.ocr_model
             self.ocr_model = None
 
     def run_ocr(self, task_name, recognition_image_paths, total_steps):
-        """Perform the OCR operation for the task."""
         try:
             self.initialize_model()
 
@@ -361,7 +359,7 @@ class ImageProcessingThread(QThread):
                                 return
                             try:
                                 response = requests.post(
-                                    "https://api.fxgnt.cn/ocr/tyocr.php",
+                                    "https://api.npcbug.com/ocr/tyocr.php",
                                     data={'base64': image_base64, 'auth': auth_code}
                                 )
 
@@ -564,19 +562,15 @@ class ImageProcessingThread(QThread):
         return None
 
     def calculate_image_time(self, video_creation_time, image_file):
-        """Calculate the real time for the image based on its filename."""
         if video_creation_time is None:
             # 如果创建时间获取失败，则返回“获取失败”
             return "获取失败"
         try:
-            # Extract the actual second count from the filename, e.g., '7_ocr_1_03.png' should give 3
             parts = image_file.split('_')
-            actual_second = int(parts[-1].split('.')[0])  # This directly gives the second count
+            actual_second = int(parts[-1].split('.')[0])
 
-            # Calculate the image time point by adding the actual seconds to the creation time
             image_time_point = video_creation_time + timedelta(seconds=actual_second)
 
-            # Format time as a string
             return image_time_point.strftime("%Y-%m-%d %H:%M:%S")
         except Exception as e:
             self.log_signal.emit(f"计算图片时间点时出现错误: {e}")
@@ -688,14 +682,12 @@ class TaskListInterface(QWidget):
         progress_log_layout.addLayout(progress_button_layout)
         progress_log_layout.addWidget(self.log_text)
 
-        # Set right margin for log_text
         progress_log_layout.addSpacerItem(
             QSpacerItem(10, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
         )
 
         progress_log_layout.addWidget(self.image_label)
 
-        # Set right margin for image_label
         progress_log_layout.addSpacerItem(
             QSpacerItem(12, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
         )
@@ -716,7 +708,7 @@ class TaskListInterface(QWidget):
         self.task_logs = {}
         self.task_progress = {}
         self.task_results = {}
-        self.task_images = {}  # Store images of each task
+        self.task_images = {}
 
     def add_task(self, task_name, model, export_option, file_path, replace_option, image_path, replace_text,
                  frame_interval, grayscale_option):
@@ -736,7 +728,7 @@ class TaskListInterface(QWidget):
         self.task_logs[task_name] = []
         self.task_progress[task_name] = 0
         self.task_results[task_name] = None
-        self.task_images[task_name] = []  # Initialize the image list for the task
+        self.task_images[task_name] = []
 
         # 默认选中添加的任务
         self.table_widget.selectRow(0)
@@ -784,7 +776,7 @@ class TaskListInterface(QWidget):
 
         # 清除日志
         self.log_text.clear()
-        self.image_label.clear()  # Clear image display when a task is deleted
+        self.image_label.clear()
 
         if task_name in self.task_logs:
             del self.task_logs[task_name]
@@ -922,7 +914,7 @@ class TaskListInterface(QWidget):
                 self.progress_ring.setValue(0)
                 self.progress_ring.setFormat("0%")
             self.log_text.clear()
-            self.image_label.clear()  # Clear image when no task is selected
+            self.image_label.clear()
             return
 
         task_name = self.table_widget.item(self.table_widget.currentRow(), 0).text()
@@ -932,7 +924,6 @@ class TaskListInterface(QWidget):
         if task_name in self.task_progress:
             self.update_progress(task_name, self.task_progress[task_name])
 
-        # Update image display for the selected task
         self.update_image_display_for_task(task_name)
 
     def on_task_complete(self, task_name):
@@ -992,7 +983,6 @@ class TaskListInterface(QWidget):
         return False
 
     def store_image_for_task(self, task_name, image_path):
-        """Store images of the task."""
         if task_name in self.task_images:
             self.task_images[task_name].append(image_path)
 
@@ -1000,7 +990,6 @@ class TaskListInterface(QWidget):
             self.set_image_to_label(image_path)
 
     def is_current_task_selected(self, task_name):
-        """Check if the current task's row is selected."""
         selected_items = self.table_widget.selectedItems()
         if not selected_items:
             return False
@@ -1008,12 +997,10 @@ class TaskListInterface(QWidget):
         return task_name == selected_task_name
 
     def set_image_to_label(self, image_path):
-        """Set image to the QLabel."""
         pixmap = QPixmap(image_path)
         self.image_label.setPixmap(pixmap.scaled(self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio))
 
     def update_image_display_for_task(self, task_name):
-        """Display the last image of the selected task."""
         if task_name in self.task_images:
             task_images = self.task_images[task_name]
             if task_images:

@@ -1,3 +1,4 @@
+# coding:utf-8
 import re
 import os
 import shutil
@@ -374,7 +375,7 @@ class Addtaskinterface(QWidget):
                         content=(
                             '云端OCR授权码是永久免费生成的，这样做是为了避免有人疯狂调用接口做的限制而已，'
                             '云端OCR一天总共可以识别5万次，注意！是总共5万次！不是单个授权码5万次！'
-                            '\n\n授权码免费生成地址：api.fxgnt.cn'
+                            '\n\n授权码免费生成地址：api.npcbug.com'
                         ),
                         parent=self
                     )
@@ -502,7 +503,7 @@ class Addtaskinterface(QWidget):
                         content=(
                             '云端OCR授权码是永久免费生成的，这样做是为了避免有人疯狂调用接口做的限制而已，'
                             '云端OCR一天总共可以识别5万次，注意！是总共5万次！不是单个授权码5万次！'
-                            '\n\n授权码免费生成地址：api.fxgnt.cn'
+                            '\n\n授权码免费生成地址：api.npcbug.com'
                         ),
                         parent=self
                     )
