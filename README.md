@@ -30,10 +30,6 @@
 - [x] 视频多区域识别
 - [x] 转换灰度图像/二值化自由选择
 - [x] 自定义秒数提取帧
-- [x] 任务停止功能
-
-## 计划开发
-- [ ] USB投屏实时识别
 
 ## 支持的OCR模型
 |  模型名字  |
@@ -46,7 +42,7 @@
 ## 云端OCR授权码获取
 云端OCR一天识别总额是5万次识别，不是单个授权码5万次，是全部授权码加起来5万次！
 
-永久免费获取授权码：[api.fxgnt.cn](https://api.fxgnt.cn/)
+永久免费获取授权码：[api.npcbug.com](https://api.npcbug.com/)
 
 ## 下载
 [PicOCR.zip](https://github.com/hzh888/picocr/releases/)
