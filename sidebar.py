@@ -45,12 +45,12 @@ class Window(FluentWindow):
     def initWindow(self):
         self.resize(980, 695)
         self.setWindowIcon(QIcon('resource/logo.png'))
-        self.setWindowTitle('PicOCR V1.3')
+        self.setWindowTitle('PicOCR V1.4')
 
     def showMessageBox(self):
         w = MessageBox(
             '说明',
-            '本软件采用Python编写，UI界面使用QFluentWidgets组件库，目前软件已经开源至Github，软件的诞生是因为公司原来的识别工具不准确并且开发人员已经离职许久，身为测试人员的我又需要识别工具，所以只能利用下班时间开发了这款软件，当然，我对代码不太熟，写的很垃圾，属于现学现写，人和代码，有一个能跑就行。',
+            '本软件采用Python编写，UI界面使用PyQT6+QFluentWidgets组件库，软件已经开源至Github，软件的诞生是因为公司原来的识别工具不准确并且开发人员已经离职许久，身为测试人员的我又需要识别工具，所以只能利用空余时间开发了这款软件，当然，我对代码不太熟，写的很垃圾，属于现学现写，人和代码，有一个能跑就行。',
             self
         )
         w.yesButton.setText('访问Github仓库')
