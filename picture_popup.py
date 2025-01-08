@@ -14,7 +14,7 @@ class ImageLabel(QLabel):
         super().__init__(parent)
         self.original_pixmap = pixmap
         self.current_pixmap = pixmap
-        self.scale_factor = 1.0
+        self.scale_factor = 1
         self.drawing = False
         self.start_point = QPoint()
         self.end_point = QPoint()
@@ -52,7 +52,7 @@ class ImageLabel(QLabel):
         self.current_pixmap = self.original_pixmap.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         painter.drawPixmap(0, 0, self.current_pixmap)
 
-        pen = QPen(Qt.GlobalColor.red, 2, Qt.PenStyle.SolidLine)
+        pen = QPen(Qt.GlobalColor.red, 1, Qt.PenStyle.SolidLine)
         painter.setPen(pen)
 
         for rect in self.rectangles:
