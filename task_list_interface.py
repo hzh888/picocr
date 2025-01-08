@@ -7,10 +7,10 @@ import ddddocr
 from natsort import natsorted
 from paddleocr import PaddleOCR
 from openpyxl import Workbook
-from openpyxl.drawing.image import Image
+from openpyxl.drawing.image import Image as OpenpyxlImage
 from openpyxl.styles import Border, Side, Alignment
 from openpyxl.utils import get_column_letter
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QDateTime
 from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTableWidgetItem, QHeaderView, QSpacerItem, QSizePolicy,
@@ -27,6 +27,10 @@ from pymediainfo import MediaInfo
 from datetime import datetime, timedelta
 import pytz
 from requests.exceptions import RequestException  # 导入RequestException
+import shutil
+import traceback
+import re
+
 
 def load_auth_code(log_signal):
     """从config.json文件加载AuthCode"""
@@ -45,6 +49,7 @@ def load_auth_code(log_signal):
     except (json.JSONDecodeError, KeyError):
         log_signal.emit("未配置云端OCR授权码")
         return None
+
 
 def get_baidu_credentials(log_signal):
     """从config.json文件加载百度OCR的API_KEY、SECRET_KEY和URL"""
@@ -73,6 +78,7 @@ def get_baidu_credentials(log_signal):
         log_signal.emit("读取config.json配置时发生错误")
         return None, None, None
 
+
 def get_access_token(api_key, secret_key, log_signal):
     """使用API_KEY和SECRET_KEY获取百度OCR的access_token"""
     url = "https://aip.baidubce.com/oauth/2.0/token"
@@ -85,17 +91,24 @@ def get_access_token(api_key, secret_key, log_signal):
         log_signal.emit("网络连接失败")
         return None
 
-def replace_text_in_result(result, replace_option, replace_text):
+
+def replace_text_in_result(result, replace_option, replace_text, log_signal=None):
     if replace_option == "替换文本":
         replacements = replace_text.split(",")
         for replacement in replacements:
-            original, new_text = replacement.split("=")
-            result = result.replace(original, new_text)
+            parts = replacement.split("=")
+            if len(parts) == 2:
+                original, new_text = parts
+                result = result.replace(original, new_text)
+            else:
+                if log_signal:
+                    log_signal.emit(f"替换文本格式错误: '{replacement}'")
     elif replace_option == "去掉文本":
         remove_texts = replace_text.split(",")
         for text in remove_texts:
             result = result.replace(text, "")
     return result
+
 
 class ImageProcessingThread(QThread):
     log_signal = pyqtSignal(str)
@@ -117,6 +130,7 @@ class ImageProcessingThread(QThread):
             imagestorage_dir = os.path.join('Imagestorage', task_name)
             frame_interval = int(self.task['frame_interval'])
             grayscale_option = self.task['grayscale_option']
+            image_time_record = self.task.get('image_time_record', "不记录图片时间")  # 获取新的任务参数
 
             if os.path.exists(imagestorage_dir):
                 self._delete_folder(imagestorage_dir)
@@ -129,6 +143,26 @@ class ImageProcessingThread(QThread):
             if not os.path.exists(file_path):
                 self.log_signal.emit(f"'{os.path.basename(file_path)}' 不存在，任务停止")
                 return
+
+            # 获取定时执行的时间
+            schedule_time_str = self.task['schedule_datetime']  # "HH时mm分"
+
+            if schedule_time_str != "无需定时":
+                try:
+                    schedule_time = datetime.strptime(schedule_time_str, "%H时%M分").time()
+                except ValueError:
+                    self.log_signal.emit("定时时间格式错误，任务停止")
+                    return
+
+                # 获取当前时间
+                current_datetime = datetime.now()
+
+                # 构建定时执行的datetime对象
+                scheduled_datetime = datetime.combine(current_datetime.date(), schedule_time)
+                if scheduled_datetime <= current_datetime:
+                    scheduled_datetime += timedelta(days=1)  # 设置为第二天
+            else:
+                scheduled_datetime = None  # 无需定时
 
             recognition_image_paths = self.task['recognition_image_path'].split(",")
             cap = cv2.VideoCapture(file_path)
@@ -183,10 +217,31 @@ class ImageProcessingThread(QThread):
                             x, y, w, h = rect["left"], rect["top"], rect["width"], rect["height"]
                             crop_image = frame[y:y + h, x:x + w]
 
-                            if grayscale_option in ["转换灰度图像", "转换灰度图像二值化", "转换灰度图像(固定二值化)"]:
+                            # 新增处理图片：放大倍数 (scale_factor)、膨胀迭代次数 (dilation_iterations)、膨胀核大小 (kernel_size)
+                            scale_factor = 2  # 放大倍数，默认为2倍
+                            dilation_iterations = 1  # 膨胀迭代次数，默认为1次
+                            kernel_size = (2, 2)  # 膨胀核大小，默认为(2,2)
+
+                            # 放大图片
+                            crop_image = cv2.resize(crop_image, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR)
+
+                            # 膨胀图片
+                            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, kernel_size)
+                            crop_image = cv2.dilate(crop_image, kernel, iterations=dilation_iterations)
+
+                            # 新增锐化操作
+                            sharpening_kernel = np.array([[0, -1, 0],
+                                                          [-1, 5, -1],
+                                                          [0, -1, 0]])
+                            crop_image = cv2.filter2D(crop_image, -1, sharpening_kernel)
+
+                            # 新增功能：检查并处理裁剪后的图片
+                            crop_image = self.check_and_process_image(crop_image, task_name)
+
+                            if grayscale_option in ["转换灰度图像", "转换灰度图像(自适应二值化)", "转换灰度图像(固定二值化)"]:
                                 crop_image = cv2.cvtColor(crop_image, cv2.COLOR_BGR2GRAY)
 
-                            if grayscale_option == "转换灰度图像二值化":
+                            if grayscale_option == "转换灰度图像(自适应二值化)":
                                 crop_image = cv2.adaptiveThreshold(
                                     crop_image, 255,
                                     cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -213,35 +268,107 @@ class ImageProcessingThread(QThread):
             self.log_signal.emit("截取图片完毕，正在执行识别初始化...")
 
             self.ocr_running = True
-            self.run_ocr(task_name, recognition_image_paths, total_steps)
+            self.run_ocr(task_name, recognition_image_paths, total_steps, scheduled_datetime, image_time_record)
 
             if not self.stop_flag['stop']:
                 self.task_complete_signal.emit(task_name)
 
         except Exception as e:
-            self.log_signal.emit(f"处理过程中出现错误: {e}")
+            self.log_signal.emit(f"处理过程中出现错误: {e}\n{traceback.format_exc()}")
 
         finally:
             self.release_model()
 
-    def initialize_model(self):
-        model = self.task['model']
-        if model == "Ddddocr模型":
-            self.ocr_model = ddddocr.DdddOcr()
-        elif model == "Paddle模型":
-            self.ocr_model = PaddleOCR(
-                det_model_dir='./models/whl/det/ch/ch_PP-OCRv4_det_infer/',
-                rec_model_dir='./models/whl/rec/ch/ch_PP-OCRv4_rec_infer/',
-                cls_model_dir='./models/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/',
-                lang='ch', use_angle_cls=True, use_gpu=False
-            )
+    def check_and_process_image(self, image, task_name):
+        """
+        检查裁剪后的图片是否符合要求，不符合则进行处理。
+        要求：
+        - 文件大小不超过10MB
+        - 最短边至少15px
+        - 最长边不超过4096px
+        """
+        # 首先，检查尺寸
+        height, width = image.shape[:2]
+        min_side = min(height, width)
+        max_side = max(height, width)
 
-    def release_model(self):
-        if self.ocr_model:
-            del self.ocr_model
-            self.ocr_model = None
+        # 标记是否需要调整
+        needs_resize = False
 
-    def run_ocr(self, task_name, recognition_image_paths, total_steps):
+        # 检查最短边
+        if min_side < 15:
+            self.log_signal.emit(f"图片 '{task_name}' 最短边 {min_side}px 小于15px，进行调整")
+            needs_resize = True
+
+        # 检查最长边
+        if max_side > 4096:
+            self.log_signal.emit(f"图片 '{task_name}' 最长边 {max_side}px 超过4096px，进行调整")
+            needs_resize = True
+
+        if needs_resize:
+            # 计算缩放比例
+            scale = 1.0
+            if max_side > 4096:
+                scale = 4096 / max_side
+            if min_side * scale < 15:
+                scale = 15 / min_side
+
+            new_width = int(width * scale)
+            new_height = int(height * scale)
+
+            # 防止尺寸过小或过大
+            new_width = max(new_width, 15)
+            new_height = max(new_height, 15)
+            new_width = min(new_width, 4096)
+            new_height = min(new_height, 4096)
+
+            image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+            self.log_signal.emit(f"图片 '{task_name}' 调整尺寸到 {new_width}x{new_height}px")
+
+        # 检查文件大小
+        is_ok = False
+        attempt = 0
+        max_attempts = 5
+        while not is_ok and attempt < max_attempts:
+            success, encoded_image = cv2.imencode('.png', image)
+            if not success:
+                self.log_signal.emit(f"图片 '{task_name}' 编码失败，尝试重新调整")
+                # 尝试压缩
+                image = self.compress_image(image)
+                attempt += 1
+                continue
+
+            size_mb = len(encoded_image.tobytes()) / (1024 * 1024)
+            if size_mb <= 10:
+                is_ok = True
+            else:
+                self.log_signal.emit(f"图片 '{task_name}' 大小为 {size_mb:.2f}MB，超过10MB，进行压缩")
+                image = self.compress_image(image)
+                attempt += 1
+
+        if not is_ok:
+            self.log_signal.emit(f"图片 '{task_name}' 无法压缩到10MB以下，使用当前大小")
+
+        return image
+
+    def compress_image(self, image):
+        """
+        压缩图片以减少文件大小。
+        这里通过降低分辨率和调整颜色深度来实现压缩。
+        """
+        # 降低分辨率的一个简单方法是缩小图片
+        height, width = image.shape[:2]
+        scale = 0.9  # 每次缩小10%
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+        if new_width < 15 or new_height < 15:
+            new_width = max(new_width, 15)
+            new_height = max(new_height, 15)
+        image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+        self.log_signal.emit(f"图片压缩至 {new_width}x{new_height}px")
+        return image
+
+    def run_ocr(self, task_name, recognition_image_paths, total_steps, scheduled_datetime, image_time_record):
         try:
             self.initialize_model()
 
@@ -253,6 +380,7 @@ class ImageProcessingThread(QThread):
             step_count = total_steps // 2
             ocr_results = {}
 
+            # 获取百度或云端OCR的凭证
             if model == "百度OCR(联网)":
                 api_key, secret_key, base_url = get_baidu_credentials(self.log_signal)
                 if not api_key or not secret_key or not base_url:
@@ -266,11 +394,13 @@ class ImageProcessingThread(QThread):
 
                 url = base_url + access_token
 
-            else:
+            elif model == "云端OCR(联网)":
                 auth_code = load_auth_code(self.log_signal)
                 if not auth_code:
                     self.stop_flag['stop'] = True
                     return
+            else:
+                auth_code = None  # 本地模型无需授权码
 
             for img_name in recognition_image_paths:
                 if self.stop_flag['stop']:
@@ -411,7 +541,7 @@ class ImageProcessingThread(QThread):
                     if not result:
                         result = "识别失败"
 
-                    result = replace_text_in_result(result, replace_option, replace_text)
+                    result = replace_text_in_result(result, replace_option, replace_text, self.log_signal)
                     ocr_results[img_name].append((image_filename, result))
                     self.log_signal.emit(f"图片 {image_filename} 的识别结果: {result}")
 
@@ -433,16 +563,39 @@ class ImageProcessingThread(QThread):
             self.log_signal.emit("任务结束")
 
         except Exception as e:
-            self.log_signal.emit(f"处理过程中出现错误: {e}")
+            self.log_signal.emit(f"处理过程中出现错误: {e}\n{traceback.format_exc()}")
 
         finally:
             self.release_model()
 
+    def initialize_model(self):
+        model = self.task['model']
+        if model == "Ddddocr模型":
+            self.ocr_model = ddddocr.DdddOcr()
+        elif model == "Paddle模型":
+            model_dir = os.path.join('./models/whl/rec/ch/ch_PP-OCRv4_rec_infer/')
+            if not os.path.exists(model_dir):
+                self.log_signal.emit(f"PaddleOCR模型目录不存在: {model_dir}")
+                self.stop_flag['stop'] = True
+                return
+            self.ocr_model = PaddleOCR(
+                det_model_dir=os.path.join(model_dir, 'det'),
+                rec_model_dir=os.path.join(model_dir, 'rec'),
+                cls_model_dir=os.path.join(model_dir, 'cls'),
+                lang='ch',
+                use_angle_cls=True,
+                use_gpu=False
+            )
+
+    def release_model(self):
+        if self.ocr_model:
+            del self.ocr_model
+            self.ocr_model = None
 
     def stop(self):
         self.stop_flag['stop'] = True
         self.log_signal.emit("任务手动停止")
-        self.release_model()  # Ensure model is released when manually stopping
+        self.release_model()  # 确保手动停止时释放模型
 
     def export_results(self, task_name, ocr_results):
         try:
@@ -466,20 +619,27 @@ class ImageProcessingThread(QThread):
             replace_text = self.task['replace_text']
             frame_interval = int(self.task['frame_interval'])
             grayscale_option = self.task['grayscale_option']
+            schedule_datetime = self.task['schedule_datetime']  # 新增定时执行信息
             file_path = self.task['file_path']
+            image_time_record = self.task.get('image_time_record', "不记录图片时间")  # 获取新的任务参数
 
-            # 获取视频创建时间并转换为datetime对象
-            video_creation_time = self.get_video_creation_time(file_path)
+            # 从文件名中提取基准时间
+            base_time = self.parse_datetime_from_filename(os.path.basename(file_path))
+            if base_time is None:
+                self.log_signal.emit("无法从文件名中解析日期时间，导出结果时时间点将显示为 '获取失败'")
 
             for img_name, results in ocr_results.items():
                 sheet_name = img_name.split('.')[0]
                 worksheet = workbook.create_sheet(title=sheet_name)
 
-                # 新增表头，调整列顺序，将“图片时间点”放在“原图”后面
-                worksheet.append([
-                    "图片文件", "识别结果", "原图", "媒体时间点", "图片秒数点",
-                    "识别模型", "替换选项", "替换文本", "提取间隔", "灰度图像选项"
-                ])
+                # 调整表头，移除“媒体时间点”，并根据image_time_record设置“图片时间点”
+                headers = [
+                    "图片文件", "识别结果", "原图",
+                    "图片时间点",  # 仅保留“图片时间点”
+                    "图片秒数点",
+                    "识别模型", "替换选项", "替换文本", "提取间隔", "灰度图像选项", "定时执行"
+                ]
+                worksheet.append(headers)
 
                 thin_border = Border(
                     left=Side(style='thin'),
@@ -512,12 +672,21 @@ class ImageProcessingThread(QThread):
                     worksheet.cell(row=r_idx, column=9, value=frame_interval)
                     worksheet.cell(row=r_idx, column=10, value=grayscale_option)
 
-                    # 提取图片的时间点并计算真实时间
-                    image_time_point = self.calculate_image_time(video_creation_time, image_file)
-                    worksheet.cell(row=r_idx, column=4, value=image_time_point)  # 调整列位置
+                    # 根据schedule_datetime是否为“无需定时”填写
+                    if schedule_datetime == "无需定时":
+                        worksheet.cell(row=r_idx, column=11, value="无需定时")
+                    else:
+                        worksheet.cell(row=r_idx, column=11, value=schedule_datetime)  # 保留原有定时执行信息
+
+                    # 根据image_time_record决定“图片时间点”填充内容
+                    if image_time_record == "记录图片时间":
+                        image_time_point = self.calculate_image_time(base_time, image_file)
+                        worksheet.cell(row=r_idx, column=4, value=image_time_point)  # 设置“图片时间点”
+                    else:
+                        worksheet.cell(row=r_idx, column=4, value="不记录图片时间")
 
                     img_path = os.path.join('Imagestorage', task_name, sheet_name, image_file)
-                    img = Image(img_path)
+                    img = OpenpyxlImage(img_path)
 
                     img_width, img_height = img.width, img.height
                     col_letter = get_column_letter(3)
@@ -527,49 +696,27 @@ class ImageProcessingThread(QThread):
                     img.anchor = f'C{r_idx}'
                     worksheet.add_image(img)
 
-                    for col in range(1, 11):  # Update range to include new column
+                    for col in range(1, 12):  # 更新范围以包含新列
                         cell = worksheet.cell(row=r_idx, column=col)
                         cell.border = thin_border
                         cell.alignment = center_alignment  # 设置对齐方式
 
-                # 设置表头的边框和对齐方式
-                for col in range(1, 11):  # Update range to include new column
-                    header_cell = worksheet.cell(row=1, column=col)
-                    header_cell.border = thin_border
-                    header_cell.alignment = center_alignment  # 设置对齐方式
-
-            del workbook['Sheet']
+            if 'Sheet' in workbook.sheetnames:
+                del workbook['Sheet']
             workbook.save(output_path)
             self.log_signal.emit(f"识别结果已导出至: {output_path}")
         except Exception as e:
-            self.log_signal.emit(f"导出结果时出现错误: {e}")
+            self.log_signal.emit(f"导出结果时出现错误: {e}\n{traceback.format_exc()}")
 
-    def get_video_creation_time(self, file_path):
-        """Get the creation time of the video file."""
-        media_info = MediaInfo.parse(file_path)
-        for track in media_info.tracks:
-            if track.track_type == 'General':
-                # 获取创建时间
-                creation_time = track.tagged_date or track.recorded_date
-                if creation_time:
-                    try:
-                        # 尝试解析格式为 '2024-06-13 02:03:13 UTC'
-                        dt = datetime.strptime(creation_time, "%Y-%m-%d %H:%M:%S %Z")
-                        # 将其转换为中国标准时间
-                        return dt.replace(tzinfo=pytz.utc).astimezone(pytz.timezone('Asia/Shanghai'))
-                    except ValueError:
-                        self.log_signal.emit(f"无法解析视频的创建时间: {creation_time}")
-        return None
-
-    def calculate_image_time(self, video_creation_time, image_file):
-        if video_creation_time is None:
-            # 如果创建时间获取失败，则返回“获取失败”
+    def calculate_image_time(self, base_time, image_file):
+        if base_time is None:
+            # 如果基准时间获取失败，则返回“获取失败”
             return "获取失败"
         try:
             parts = image_file.split('_')
             actual_second = int(parts[-1].split('.')[0])
 
-            image_time_point = video_creation_time + timedelta(seconds=actual_second)
+            image_time_point = base_time + timedelta(seconds=actual_second)
 
             return image_time_point.strftime("%Y-%m-%d %H:%M:%S")
         except Exception as e:
@@ -586,12 +733,30 @@ class ImageProcessingThread(QThread):
         return False
 
     def _delete_folder(self, folder_path):
-        for root, dirs, files in os.walk(folder_path, topdown=False):
-            for name in files:
-                os.remove(os.path.join(root, name))
-            for name in dirs:
-                os.rmdir(os.path.join(root, name))
-        os.rmdir(folder_path)
+        try:
+            shutil.rmtree(folder_path)
+        except Exception as e:
+            self.log_signal.emit(f"删除文件夹失败: {e}")
+
+    def parse_datetime_from_filename(self, filename):
+        """
+        从文件名中解析日期时间信息。根据提供的文件名格式，假设日期时间部分为 "YYYYMMDD-HHMMSS"
+        例如:
+            - 565-20250112-113619.mp4
+            - 20250112-113619.mp4
+            - 的深V大V-fds-565-20250112-113619.mp4
+        """
+        try:
+            # 使用正则表达式匹配 "YYYYMMDD-HHMMSS" 格式
+            match = re.search(r'(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})', filename)
+            if match:
+                year, month, day, hour, minute, second = map(int, match.groups())
+                return datetime(year, month, day, hour, minute, second)
+            else:
+                return None
+        except Exception as e:
+            self.log_signal.emit(f"解析文件名日期时间时出错: {e}")
+            return None
 
 
 class TaskListInterface(QWidget):
@@ -610,23 +775,25 @@ class TaskListInterface(QWidget):
 
         self.table_widget.setWordWrap(False)
         self.table_widget.setRowCount(0)
-        self.table_widget.setColumnCount(9)
+        self.table_widget.setColumnCount(11)  # 修改为11列，包括“图片时间点”
         self.table_widget.setHorizontalHeaderLabels(
             ['任务名', '识别模型', '导出选项', '视频路径', '识别图片路径', '替换选项', '替换文本', '提取间隔',
-             '灰度图像选项'])
+             '灰度图像选项', '定时执行', '图片时间点'])  # 移除“媒体时间点”列
         self.table_widget.verticalHeader().hide()
 
         self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table_widget.horizontalHeader().setStretchLastSection(True)
         self.table_widget.setColumnWidth(0, 100)
-        self.table_widget.setColumnWidth(1, 120)
-        self.table_widget.setColumnWidth(2, 120)
+        self.table_widget.setColumnWidth(1, 130)
+        self.table_widget.setColumnWidth(2, 110)
         self.table_widget.setColumnWidth(3, 120)
         self.table_widget.setColumnWidth(4, 120)
-        self.table_widget.setColumnWidth(5, 120)
+        self.table_widget.setColumnWidth(5, 105)
         self.table_widget.setColumnWidth(6, 100)
         self.table_widget.setColumnWidth(7, 100)
-        self.table_widget.setColumnWidth(8, 120)
+        self.table_widget.setColumnWidth(8, 210)
+        self.table_widget.setColumnWidth(9, 200)
+        self.table_widget.setColumnWidth(10, 135)
 
         self.main_layout.addWidget(self.table_widget)
 
@@ -709,9 +876,10 @@ class TaskListInterface(QWidget):
         self.task_progress = {}
         self.task_results = {}
         self.task_images = {}
+        self.timers = {}  # 新增：用于存储定时器
 
     def add_task(self, task_name, model, export_option, file_path, replace_option, image_path, replace_text,
-                 frame_interval, grayscale_option):
+                frame_interval, grayscale_option, schedule_datetime, image_time_record):
         row_position = self.table_widget.rowCount()
         self.table_widget.insertRow(row_position)
 
@@ -724,6 +892,8 @@ class TaskListInterface(QWidget):
         self.table_widget.setItem(row_position, 6, self.create_non_editable_item(replace_text))
         self.table_widget.setItem(row_position, 7, self.create_non_editable_item(frame_interval))
         self.table_widget.setItem(row_position, 8, self.create_non_editable_item(grayscale_option))
+        self.table_widget.setItem(row_position, 9, self.create_non_editable_item(schedule_datetime))
+        self.table_widget.setItem(row_position, 10, self.create_non_editable_item(image_time_record))  # 添加新列
 
         self.task_logs[task_name] = []
         self.task_progress[task_name] = 0
@@ -731,7 +901,30 @@ class TaskListInterface(QWidget):
         self.task_images[task_name] = []
 
         # 默认选中添加的任务
-        self.table_widget.selectRow(0)
+        self.table_widget.selectRow(row_position)
+
+        # 新增功能1：设置定时任务
+        if schedule_datetime != "无需定时":
+            try:
+                scheduled_time = datetime.strptime(schedule_datetime, "%H时%M分").time()
+                current_datetime = datetime.now()
+                scheduled_datetime = datetime.combine(current_datetime.date(), scheduled_time)
+                if scheduled_datetime <= current_datetime:
+                    scheduled_datetime += timedelta(days=1)  # 设置为第二天
+
+                delay = (scheduled_datetime - current_datetime).total_seconds()
+                if delay > 0:
+                    timer = QTimer(self)
+                    timer.setSingleShot(True)
+                    timer.timeout.connect(lambda tn=task_name: self.execute_scheduled_task(tn))
+                    timer.start(int(delay * 1000))  # QTimer以毫秒为单位
+                    self.timers[task_name] = timer
+                    self.update_log(task_name, f"任务已设置 {schedule_datetime} 定时执行")
+                else:
+                    # 时间已过，不设置定时器
+                    self.update_log(task_name, f"任务的定时时间已过，保持手动执行")
+            except ValueError:
+                self.update_log(task_name, f"任务的定时时间格式错误，保持手动执行")
 
     def create_non_editable_item(self, text):
         item = QTableWidgetItem(text)
@@ -757,24 +950,33 @@ class TaskListInterface(QWidget):
                 parent=self,
                 position=InfoBarPosition.TOP_RIGHT
             )
+        elif info_type == 'info':
+            InfoBar.warning(
+                title='提示',
+                content=message,
+                isClosable=True,
+                duration=2000,
+                parent=self,
+                position=InfoBarPosition.TOP_RIGHT
+            )
 
     def delete_selected_row(self):
         selected_items = self.table_widget.selectedItems()
         if not selected_items:
-            self.show_info_bar('请选择需要删除的任务', 'error')
+            self.show_info_bar('请选择需要删除的任务', 'info')
             return
 
         selected_row = self.table_widget.row(selected_items[0])
         task_name = self.table_widget.item(selected_row, 0).text()
         self.table_widget.removeRow(selected_row)
-        self.log_text.append(f"任务删除成功: {task_name}")
+        self.update_log(task_name, f"任务删除成功: {task_name}")
         self.show_info_bar('删除成功', 'success')
 
         # 重置进度条
         self.progress_ring.setValue(0)
         self.progress_ring.setFormat("0%")
 
-        # 清除日志
+        # 清除日志（仅清除当前显示的日志）
         self.log_text.clear()
         self.image_label.clear()
 
@@ -790,6 +992,12 @@ class TaskListInterface(QWidget):
             del self.stop_flags[task_name]
         if task_name in self.task_images:
             del self.task_images[task_name]
+
+        # 新增功能2：删除任务时移除定时器
+        if task_name in self.timers:
+            self.timers[task_name].stop()
+            del self.timers[task_name]
+            self.update_log(task_name, f"已移除任务 '{task_name}' 的定时器")
 
         self.delete_task_files(task_name)
 
@@ -818,22 +1026,23 @@ class TaskListInterface(QWidget):
             self._delete_folder(imagestorage_dir)
 
     def _delete_folder(self, folder_path):
-        for root, dirs, files in os.walk(folder_path, topdown=False):
-            for name in files:
-                os.remove(os.path.join(root, name))
-            for name in dirs:
-                os.rmdir(os.path.join(root, name))
-        os.rmdir(folder_path)
+        try:
+            shutil.rmtree(folder_path)
+        except Exception as e:
+            self.log_text.append(f"删除文件夹失败: {e}")
+            self.show_info_bar(f"删除文件夹失败: {e}", 'error')
 
     def start_task(self):
         selected_items = self.table_widget.selectedItems()
         if not selected_items:
-            self.show_info_bar('请选择需要执行的任务', 'error')
+            self.show_info_bar('请选择需要执行的任务', 'info')
             return
 
         selected_row = self.table_widget.row(selected_items[0])
+        task_name = self.table_widget.item(selected_row, 0).text()
+
         task = {
-            'task_name': self.table_widget.item(selected_row, 0).text(),
+            'task_name': task_name,
             'model': self.table_widget.item(selected_row, 1).text(),
             'export_option': self.table_widget.item(selected_row, 2).text(),
             'file_path': self.table_widget.item(selected_row, 3).text(),
@@ -841,51 +1050,65 @@ class TaskListInterface(QWidget):
             'replace_option': self.table_widget.item(selected_row, 5).text(),
             'replace_text': self.table_widget.item(selected_row, 6).text(),
             'frame_interval': self.table_widget.item(selected_row, 7).text(),
-            'grayscale_option': self.table_widget.item(selected_row, 8).text()
+            'grayscale_option': self.table_widget.item(selected_row, 8).text(),
+            'schedule_datetime': self.table_widget.item(selected_row, 9).text(),  # 获取定时执行信息
+            'image_time_record': self.table_widget.item(selected_row, 10).text()  # 获取图片时间点信息
         }
 
-        self.log_text.append(f"开始执行任务: {task['task_name']}")
+        self.update_log(task_name, f"开始执行任务: {task['task_name']}")
 
-        if task['task_name'] in self.threads and self.threads[task['task_name']].isRunning():
-            self.show_info_bar('任务已在执行中', 'error')
+        if task_name in self.threads and self.threads[task_name].isRunning():
+            self.show_info_bar('任务已在执行中', 'info')
             return
 
         stop_flag = {'stop': False}
         processing_thread = ImageProcessingThread(task, stop_flag)
-        processing_thread.log_signal.connect(lambda msg, t=task['task_name']: self.update_log(t, msg))
-        processing_thread.progress_signal.connect(lambda value, t=task['task_name']: self.update_progress(t, value))
-        processing_thread.task_complete_signal.connect(lambda t=task['task_name']: self.on_task_complete(t))
+        processing_thread.log_signal.connect(lambda msg, t=task_name: self.update_log(t, msg))
+        processing_thread.progress_signal.connect(lambda value, t=task_name: self.update_progress(t, value))
+        processing_thread.task_complete_signal.connect(lambda t=task_name: self.on_task_complete(t))
         processing_thread.result_signal.connect(self.handle_ocr_results)
         processing_thread.image_visualization_signal.connect(self.store_image_for_task)
 
-        self.threads[task['task_name']] = processing_thread
-        self.stop_flags[task['task_name']] = stop_flag
+        self.threads[task_name] = processing_thread
+        self.stop_flags[task_name] = stop_flag
         processing_thread.start()
 
         self.set_task_row_color(selected_row, QColor("#f3d6ac"))
 
+        # 新增功能2：停止任务时移除定时器
+        if task_name in self.timers:
+            self.timers[task_name].stop()
+            del self.timers[task_name]
+            self.update_log(task_name, f"执行任务 '{task_name}' 后已移除定时器")
+
     def stop_task(self):
         selected_items = self.table_widget.selectedItems()
         if not selected_items:
-            self.show_info_bar('请选择任务', 'error')
+            self.show_info_bar('请选择任务', 'info')
             return
 
         selected_row = self.table_widget.row(selected_items[0])
         task_name = self.table_widget.item(selected_row, 0).text()
 
         if task_name not in self.threads or not self.threads[task_name].isRunning():
-            self.show_info_bar('任务未在执行过程中', 'error')
+            self.show_info_bar('任务未在执行过程中', 'info')
             return
 
         self.stop_flags[task_name]['stop'] = True
         self.show_info_bar('任务停止成功', 'success')
 
-        # 设置任务行颜色为#FF6347
+        # 设置任务行颜色为#FA8072
         self.set_task_row_color(selected_row, QColor("#FA8072"))
 
         # 仅在OCR过程中弹出导出对话框
         if self.threads[task_name].ocr_running:
             self.show_export_dialog(task_name)
+
+        # 新增功能2：停止任务时移除定时器
+        if task_name in self.timers:
+            self.timers[task_name].stop()
+            del self.timers[task_name]
+            self.update_log(task_name, f"任务 '{task_name}' 执行中已移除定时器")
 
     def show_export_dialog(self, task_name):
         w = MessageBox(
@@ -906,6 +1129,12 @@ class TaskListInterface(QWidget):
         self.task_results[task_name] = ocr_results
         if not self.stop_flags[task_name]['stop']:
             self.threads[task_name].export_results(task_name, ocr_results)
+
+        # 新增功能3：任务执行完毕移除定时器
+        if task_name in self.timers:
+            self.timers[task_name].stop()
+            del self.timers[task_name]
+            self.update_log(task_name, f"任务 '{task_name}' 执行完毕，已移除定时器")
 
     def on_task_selected(self):
         selected_items = self.table_widget.selectedItems()
@@ -933,6 +1162,12 @@ class TaskListInterface(QWidget):
             if row_position is not None:
                 self.set_task_row_color(row_position, QColor("#c9eabe"))
 
+            # 新增功能3：任务执行完毕移除定时器
+            if task_name in self.timers:
+                self.timers[task_name].stop()
+                del self.timers[task_name]
+                self.update_log(task_name, f"任务 '{task_name}' 执行完毕，已移除定时器")
+
     def find_task_row(self, task_name):
         for row in range(self.table_widget.rowCount()):
             if self.table_widget.item(row, 0).text() == task_name:
@@ -944,6 +1179,8 @@ class TaskListInterface(QWidget):
             self.table_widget.item(row, col).setBackground(color)
 
     def update_log(self, task_name, message):
+        if task_name not in self.task_logs:
+            self.task_logs[task_name] = []
         self.task_logs[task_name].append(message)
         selected_items = self.table_widget.selectedItems()
         if not selected_items:
@@ -965,7 +1202,7 @@ class TaskListInterface(QWidget):
     def clear_log(self):
         selected_items = self.table_widget.selectedItems()
         if not selected_items:
-            self.show_info_bar('请选择要清空日志的任务', 'error')
+            self.show_info_bar('请选择要清空日志的任务', 'info')
             return
 
         task_name = self.table_widget.item(self.table_widget.currentRow(), 0).text()
@@ -1008,3 +1245,12 @@ class TaskListInterface(QWidget):
                 self.set_image_to_label(last_image_path)
             else:
                 self.image_label.clear()
+
+    def execute_scheduled_task(self, task_name):
+        row_position = self.find_task_row(task_name)
+        if row_position is not None:
+            # 自动选中任务
+            self.table_widget.selectRow(row_position)
+            self.start_task()
+            self.update_log(task_name, f"任务已按定时时间执行")
+            self.show_info_bar(f"任务 '{task_name}' 已按定时时间执行", 'success')
