@@ -4,15 +4,19 @@ import os
 import shutil
 import requests
 import cv2
-from PyQt6.QtCore import Qt, QTimer, QRegularExpression, QByteArray, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QRegularExpression, QByteArray, QThread, pyqtSignal, QTime
 from PyQt6.QtGui import QPixmap, QImage, QRegularExpressionValidator, QIcon, QPainter
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QFrame, QLabel, QSizePolicy
 from qfluentwidgets import PushButton, LineEdit, ComboBox, FluentIcon as FIF, InfoBar, InfoBarPosition, MessageBox, \
     Slider, ToolButton, ElevatedCardWidget, SingleDirectionScrollArea, QConfig, OptionsConfigItem, OptionsValidator, \
-    qconfig
+    qconfig, TimePicker  # 已删除 ZhDatePicker
+
 from Identifyimages import IdentifyImagesDialog
 from picture_popup import ImageDialog
+
+# 导入必要的模块
+from datetime import datetime, timedelta
 
 # 定义网络检测线程类
 class NetworkCheckThread(QThread):
@@ -69,10 +73,8 @@ class Config(QConfig):
     secretKey = OptionsConfigItem("BaiduOCR", "SecretKey", "")
     authCode = OptionsConfigItem("Authorization", "AuthCode", "")
 
-
 # 实例化配置
 cfg = Config()
-
 
 # 定义主界面类
 class Addtaskinterface(QWidget):
@@ -94,6 +96,7 @@ class Addtaskinterface(QWidget):
         scroll_area_widget.setStyleSheet("QWidget{background: transparent}")
         scroll_area_layout = QVBoxLayout(scroll_area_widget)
 
+        # 文件选择布局
         file_layout = QHBoxLayout()
         self.file_entry = LineEdit(self)
         self.file_entry.setPlaceholderText("请选择文件路径")
@@ -105,6 +108,7 @@ class Addtaskinterface(QWidget):
         file_layout.addWidget(self.file_entry)
         file_layout.addWidget(self.file_button)
 
+        # 截取图片布局
         capture_layout = QHBoxLayout()
         self.capture_entry = LineEdit(self)
         self.capture_entry.setPlaceholderText("请使用下面的视频工具截取图片")
@@ -120,19 +124,46 @@ class Addtaskinterface(QWidget):
         capture_layout.addWidget(self.clear_images_button)
         capture_layout.addWidget(self.view_image_button)
 
-        input_layout = QHBoxLayout()
+        # 新增的定时任务布局
+        self.schedule_layout = QHBoxLayout()
+
+        # 任务名输入框
         self.input_entry = LineEdit(self)
         self.input_entry.setPlaceholderText("请输入任务名")
         self.input_entry.setValidator(QRegularExpressionValidator(QRegularExpression("[^\s]*")))
         self.input_entry.setClearButtonEnabled(True)
 
+        # 新增的下拉框
+        self.schedule_combo = ComboBox(self)
+        self.schedule_combo.addItems(["无需定时执行任务", "定时执行任务"])
+        self.schedule_combo.currentIndexChanged.connect(self.toggle_schedule_widgets)
+
+        # 时间选择器
+        self.time_picker = TimePicker(self)
+        self.time_picker.setTime(QTime.currentTime())
+
+        # 将任务名输入框、下拉框、时间选择器添加到 schedule_layout
+        self.schedule_layout.addWidget(self.input_entry)
+        self.schedule_layout.addWidget(self.schedule_combo)
+        self.schedule_layout.addWidget(self.time_picker)
+
+        # 默认隐藏时间选择器
+        self.time_picker.hide()
+
+        # 将 schedule_layout 添加到 scroll_area_layout
+        scroll_area_layout.addLayout(file_layout)
+        scroll_area_layout.addLayout(capture_layout)
+        scroll_area_layout.addLayout(self.schedule_layout)
+
+        # 输入选项布局
+        input_layout = QHBoxLayout()
         self.frame_interval_entry = LineEdit(self)
         self.frame_interval_entry.setPlaceholderText("提取间隔")
         self.frame_interval_entry.setValidator(QRegularExpressionValidator(QRegularExpression(r'^[1-9]\d*$')))
         self.frame_interval_entry.setText("1")
 
         self.dropdown1 = ComboBox(self)
-        self.dropdown1.addItems(["Ddddocr模型", "Paddle模型"])  # 初始化时不显示云端和百度OCR选项
+        self.dropdown1.addItems(["Paddle模型", "Ddddocr模型"])  # 初始化时不显示云端和百度OCR选项
         self.cloud_options = ["云端OCR(联网)", "百度OCR(联网)"]  # 存储云端和百度OCR选项
         self.dropdown1.currentIndexChanged.connect(self.check_auth_code)
 
@@ -147,20 +178,32 @@ class Addtaskinterface(QWidget):
         self.dropdown4.addItems(["不替换文本", "替换文本", "去掉文本"])
         self.dropdown4.currentIndexChanged.connect(self.update_input_visibility)
 
-        input_layout.addWidget(self.input_entry, 2)
+        # 新增的下拉框：不记录图片时间和记录图片时间
+        self.dropdown_time_record = ComboBox(self)
+        self.dropdown_time_record.addItems(["不记录图片时间", "记录图片时间"])
+        self.dropdown_time_record.currentIndexChanged.connect(self.handle_time_record_change)  # 连接信号
+
+        # 初始化记录上一个选择的索引
+        self.previous_time_record_index = 0
+        self.ignore_time_record_change = False  # 用于防止递归调用
+
         input_layout.addWidget(self.frame_interval_entry, 1)
         input_layout.addWidget(self.dropdown1, 1)
         input_layout.addWidget(self.grayscale_dropdown, 1)
         input_layout.addWidget(self.dropdown3, 1)
         input_layout.addWidget(self.dropdown4, 1)
+        input_layout.addWidget(self.dropdown_time_record, 1)  # 添加新下拉框
 
-        input_layout.setStretch(0, 2)
+        input_layout.setStretch(0, 1)
         input_layout.setStretch(1, 1)
         input_layout.setStretch(2, 1)
         input_layout.setStretch(3, 1)
         input_layout.setStretch(4, 1)
-        input_layout.setStretch(5, 1)
+        input_layout.setStretch(5, 1)  # 设置新下拉框的伸缩
 
+        scroll_area_layout.addLayout(input_layout)
+
+        # 额外输入容器
         self.additional_input_container = QVBoxLayout()
         self.top_input_layout = QHBoxLayout()
         self.top_input1 = LineEdit(self)
@@ -183,7 +226,7 @@ class Addtaskinterface(QWidget):
         self.top_input_layout.addWidget(self.add_button)
 
         self.full_width_input = LineEdit(self)
-        self.full_width_input.setPlaceholderText("请输入需要去掉的文本(多个使用,隔开)")
+        self.full_width_input.setPlaceholderText("请输入需要去掉的文本(多个文本使用,隔开)")
         self.full_width_input.setClearButtonEnabled(True)
         self.full_width_input.setMaxLength(50)
         self.full_width_input.setValidator(QRegularExpressionValidator(QRegularExpression("[^\s]*")))
@@ -191,10 +234,15 @@ class Addtaskinterface(QWidget):
         self.additional_input_container.addLayout(self.top_input_layout)
         self.additional_input_container.addWidget(self.full_width_input)
 
+        scroll_area_layout.addLayout(self.additional_input_container)
+
+        # 添加任务按钮
         self.action_button = PushButton('添加任务', self)
         self.action_button.setIcon(FIF.ADD)
         self.action_button.clicked.connect(self.button_action)
+        scroll_area_layout.addWidget(self.action_button)
 
+        # 信息展示区域
         self.info_group = QFrame(self)
         self.info_group.setFrameShape(QFrame.Shape.StyledPanel)
         self.info_group.setObjectName("infoGroup")
@@ -279,11 +327,6 @@ class Addtaskinterface(QWidget):
         self.info_layout.addWidget(control_card)
         self.info_layout.setContentsMargins(0, 10, 0, 0)
 
-        scroll_area_layout.addLayout(file_layout)
-        scroll_area_layout.addLayout(capture_layout)
-        scroll_area_layout.addLayout(input_layout)
-        scroll_area_layout.addLayout(self.additional_input_container)
-        scroll_area_layout.addWidget(self.action_button)
         scroll_area_layout.addWidget(self.info_group)
         scroll_area.setWidget(scroll_area_widget)
 
@@ -307,6 +350,36 @@ class Addtaskinterface(QWidget):
         self.network_thread.network_checked.connect(self.update_dropdown1)
         self.network_thread.finished.connect(self.cleanup_thread)  # 线程完成时进行清理
         self.network_thread.start()
+
+    def handle_time_record_change(self, index):
+        if self.ignore_time_record_change:
+            return
+
+        selected_text = self.dropdown_time_record.currentText()
+        if selected_text == "记录图片时间":
+            msg_box = MessageBox(
+                title='提示',
+                content='请确保文件名为“XXXX年XX月XX日-XX时XX分XX秒”，比如“测试视频-20250112-113619.mp4”或者“test-测试视频-20250112-113619.mp4”都可以，只要文件名包含“20250112-113619”格式的日期时间即可。',
+                parent=self
+            )
+            msg_box.yesButton.setText('确定')
+            msg_box.cancelButton.setText('取消')
+            if msg_box.exec():
+                self.previous_time_record_index = index
+            else:
+                self.ignore_time_record_change = True
+                self.dropdown_time_record.setCurrentIndex(self.previous_time_record_index)
+                self.ignore_time_record_change = False
+        else:
+            self.previous_time_record_index = index
+
+    def toggle_schedule_widgets(self, index):
+        if self.schedule_combo.currentText() == "定时执行任务":
+            self.time_picker.show()
+            # 设置为当前时间
+            self.time_picker.setTime(QTime.currentTime())
+        else:
+            self.time_picker.hide()
 
     def update_dropdown1(self, has_network):
         if has_network:
@@ -462,8 +535,12 @@ class Addtaskinterface(QWidget):
         self.dropdown1.setCurrentIndex(0)
         self.dropdown3.setCurrentIndex(0)
         self.dropdown4.setCurrentIndex(0)
+        self.dropdown_time_record.setCurrentIndex(0)  # 清空新下拉框
         self.frame_interval_entry.setText("1")
         self.grayscale_dropdown.setCurrentIndex(0)
+        self.schedule_combo.setCurrentIndex(0)
+        self.time_picker.setTime(QTime.currentTime())
+        self.time_picker.hide()
         while self.additional_input_layouts:
             self.remove_additional_input(self.additional_input_layouts[-1])
         self.update_input_visibility()
@@ -480,6 +557,15 @@ class Addtaskinterface(QWidget):
             )
         elif info_type == 'success':
             InfoBar.success(
+                title='提示',
+                content=message,
+                isClosable=True,
+                duration=2000,
+                parent=self,
+                position=InfoBarPosition.TOP_RIGHT
+            )
+        elif info_type == 'info':
+            InfoBar.warning(
                 title='提示',
                 content=message,
                 isClosable=True,
@@ -546,19 +632,59 @@ class Addtaskinterface(QWidget):
         image_path = self.capture_entry.text()
         frame_interval = self.frame_interval_entry.text()
         grayscale_option = self.grayscale_dropdown.currentText()
+        image_time_record = self.dropdown_time_record.currentText()  # 获取新下拉框的值
 
+        # 获取定时执行的时间
+        schedule_option = self.schedule_combo.currentText()
+        if schedule_option == "定时执行任务":
+            selected_time = self.time_picker.time  # 去掉括号
+
+            # 获取当前时间
+            current_datetime = datetime.now()
+
+            # 将选中的时间转换为 datetime 对象
+            try:
+                selected_datetime = datetime(
+                    year=current_datetime.year,
+                    month=current_datetime.month,
+                    day=current_datetime.day,
+                    hour=selected_time.hour(),
+                    minute=selected_time.minute(),
+                    second=0
+                )
+            except Exception as e:
+                self.show_info_bar(f'时间转换错误: {e}', 'error')
+                return
+
+            # 添加时间验证逻辑：检查选择的时间是否等于当前时间（精确到分钟）
+            current_time = current_datetime.replace(second=0, microsecond=0)
+            selected_time_compare = selected_datetime.replace(second=0, microsecond=0)
+            if selected_time_compare == current_time:
+                self.show_info_bar('定时时间禁止等于当前系统时间，请选择其他时间段。', 'error')
+                return
+
+            # 如果选择的时间已经过去，则设置为明天
+            if selected_datetime <= current_datetime:
+                selected_datetime += timedelta(days=1)
+
+            # 格式化时间为字符串
+            selected_time_str = selected_time.toString("HH时mm分")
+            schedule_datetime = selected_time_str
+
+        else:
+            schedule_datetime = "无需定时"
 
         if not file_path:
-            self.show_info_bar('文件路径不能为空', 'error')
+            self.show_info_bar('文件路径不能为空', 'info')
             return
         if not task_name or not re.match(r'^[a-zA-Z0-9\u4e00-\u9fa5]+$', task_name):
-            self.show_info_bar('任务名不能为空或包含特殊字符', 'error')
+            self.show_info_bar('任务名不能为空或包含特殊字符', 'info')
             return
         if not image_path:
-            self.show_info_bar('请添加识别图片', 'error')
+            self.show_info_bar('请添加识别图片', 'info')
             return
         if not frame_interval:
-            self.show_info_bar('请输入提取间隔', 'error')
+            self.show_info_bar('请输入提取间隔', 'info')
             return
 
         replace_texts = []
@@ -566,20 +692,20 @@ class Addtaskinterface(QWidget):
             replace_text1 = self.top_input1.text()
             replace_text2 = self.top_input2.text()
             if not replace_text1 or not replace_text2:
-                self.show_info_bar('替换文本不能为空', 'error')
+                self.show_info_bar('替换文本不能为空', 'info')
                 return
             replace_texts.append(f"{replace_text1}={replace_text2}")
             for layout in self.additional_input_layouts:
                 text1 = layout.itemAt(0).widget().text()
                 text2 = layout.itemAt(1).widget().text()
                 if not text1 or not text2:
-                    self.show_info_bar('替换文本不能为空', 'error')
+                    self.show_info_bar('替换文本不能为空', 'info')
                     return
                 replace_texts.append(f"{text1}={text2}")
         elif replace_option == "去掉文本":
             remove_text = self.full_width_input.text()
             if not remove_text:
-                self.show_info_bar('去掉文本不能为空', 'error')
+                self.show_info_bar('去掉文本不能为空', 'info')
                 return
             replace_texts.append(f"{remove_text}")
         else:
@@ -629,12 +755,14 @@ class Addtaskinterface(QWidget):
 
         shutil.move(json_path, os.path.join(task_dir, "rectangles.json"))
 
-        self.task_list_interface.add_task(task_name, model, export_option, file_path, replace_option, image_path,
-                                          replace_text, frame_interval, grayscale_option)
+        # 包含 schedule_datetime 和 image_time_record 作为额外信息
+        self.task_list_interface.add_task(
+            task_name, model, export_option, file_path, replace_option, image_path,
+            replace_text, frame_interval, grayscale_option, schedule_datetime, image_time_record
+        )
         self.show_info_bar('任务添加成功', 'success')
 
         self.clear_inputs()
-
         self.clear_video_display()
 
     def clear_video_display(self):
@@ -676,7 +804,7 @@ class Addtaskinterface(QWidget):
 
     def toggle_play_pause(self):
         if not self.cap:
-            self.show_info_bar("请添加视频文件", "error")
+            self.show_info_bar("请添加视频文件", "info")
             return
 
         if self.timer.isActive():
@@ -694,7 +822,7 @@ class Addtaskinterface(QWidget):
 
     def rewind_video(self):
         if not self.cap:
-            self.show_info_bar("请添加视频文件", "error")
+            self.show_info_bar("请添加视频文件", "info")
             return
 
         self.pause_video()
@@ -704,7 +832,7 @@ class Addtaskinterface(QWidget):
 
     def forward_video(self):
         if not self.cap:
-            self.show_info_bar("请添加视频文件", "error")
+            self.show_info_bar("请添加视频文件", "info")
             return
 
         self.pause_video()
@@ -782,7 +910,7 @@ class Addtaskinterface(QWidget):
 
     def get_current_frame(self):
         if not self.cap:
-            self.show_info_bar("请添加视频文件", "error")
+            self.show_info_bar("请添加视频文件", "info")
             return
 
         if self.timer.isActive():
@@ -799,6 +927,10 @@ class Addtaskinterface(QWidget):
 
     def view_image(self):
         save_dir = "temp_images"
+        if not os.path.exists(save_dir):
+            self.show_info_bar('temp_images文件夹不存在', 'error')
+            return
+
         png_files_exist = any(file_name.lower().endswith('.png') for file_name in os.listdir(save_dir))
 
         if not png_files_exist:
@@ -829,4 +961,3 @@ class Addtaskinterface(QWidget):
                 os.remove(file_path)
         self.capture_entry.clear()
         self.show_info_bar('图片已清空', 'success')
-
